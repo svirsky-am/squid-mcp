@@ -7,3 +7,4 @@ work_dir
 dist/
 uv.lock.bak
 wd_cfg*/wb_sync.log
+src/wb_reporter.egg-info/*
