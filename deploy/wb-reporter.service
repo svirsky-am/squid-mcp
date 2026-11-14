@@ -1,0 +1,19 @@
+[Unit]
+Description=WB reporter service (periodic fetch + reports)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wb-reporter
+EnvironmentFile=/opt/wb-reporter/.staff/env
+ExecStart=/opt/wb-reporter/.venv/bin/python -m wb_reporter.cli run
+Restart=on-failure
+RestartSec=30
+# Ограничения по безопасности
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
