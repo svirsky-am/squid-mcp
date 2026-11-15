@@ -1,45 +1,71 @@
-import sqlite3
-import json
-from src.config import AppConfig
-from src.logger_setup import get_logger
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON
+from sqlalchemy.orm import declarative_base, sessionmaker
+from app_config import AppConfig
+from datetime import datetime
 
-logger = get_logger(__name__)
+Base = declarative_base()
+
+class Order(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key=True)
+    order_uid = Column(String, unique=True, index=True)
+    raw_data = Column(JSON)
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+
+class Card(Base):
+    __tablename__ = "cards"
+    id = Column(Integer, primary_key=True)
+    nm_id = Column(Integer, unique=True, index=True)
+    raw_data = Column(JSON)
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+
+def init_db(config: AppConfig):
+    engine = create_engine(config.database_url)
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import Column, Integer, String, Float, DateTime # Добавьте нужные типы
+# Импортируйте конфиг. Путь может быть другим (например, from config import AppConfig)
+from app_config import AppConfig 
+
+# 1. Инициализация конфига
 config = AppConfig()
 
-def get_db_connection():
-    return sqlite3.connect(config.db_path)
+# 2. Создание движка БД
+# Для SQLite в SQLAlchemy обязательно нужен аргумент check_same_thread=False
+engine = create_engine(
+    config.database_url,
+    connect_args={"check_same_thread": False},
+    echo=False, # Можно поставить True, если нужно видеть SQL-запросы в консоли
+)
 
-def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            id TEXT PRIMARY KEY,
-            raw_json TEXT,
-            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS cards (
-            nmID INTEGER PRIMARY KEY,
-            raw_json TEXT,
-            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
-    logger.info("База данных инициализирована.")
+# 3. Создание фабрики сессий (Именно этого объекта не хватало!)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-def save_orders(orders: list):
-    if not orders: return
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    for order in orders:
-        order_id = str(order.get("id"))
-        cursor.execute("""
-            INSERT OR REPLACE INTO orders (id, raw_json)
-            VALUES (?, ?)
-        """, (order_id, json.dumps(order, ensure_ascii=False)))
-    conn.commit()
-    conn.close()
-    logger.info(f"Сохранено {len(orders)} заказов в БД.")
+# 4. Базовый класс для моделей
+Base = declarative_base()
+
+# 5. Определение моделей (Order и Card), которые также импортируются в fetchers.py
+class Order(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key=True, index=True)
+    # ... добавьте остальные поля вашей модели ...
+
+class Card(Base):
+    __tablename__ = "cards"
+    id = Column(Integer, primary_key=True, index=True)
+    # ... добавьте остальные поля вашей модели ...
+
+# 6. Создание таблиц в базе данных (если их еще нет)
+# Эту строку часто выносят в отдельный скрипт инициализации или вызывают при старте сервиса
+Base.metadata.create_all(bind=engine)
+
+# Вспомогательная функция для получения сессии (генератор)
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

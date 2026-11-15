@@ -1,79 +1,65 @@
-import httpx
-import asyncio
+import time
+import requests
 import json
-from datetime import datetime, timezone
-from pathlib import Path
-from src.logger_setup import get_logger
-from src.config import AppConfig
-
-logger = get_logger(__name__)
-
-MARKETPLACE_API_URL = "https://marketplace-api.wildberries.ru"
-CONTENT_API_URL = "https://content-api.wildberries.ru"
+from datetime import datetime
+from app_config import AppConfig
+import logging
 
 class WBClient:
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, logger: logging.Logger):
         self.config = config
-        self.headers = {"Authorization": config.api_token}
-        self.base_url = "https://marketplace-api.wildberries.ru"
-        self.responses_dir = config.responses_dir
-        self.responses_dir.mkdir(parents=True, exist_ok=True)
+        self.logger = logger
+        self.session = requests.Session()
+        self.session.headers.update({"Authorization": self.config.api_token})
+        self.marketplace_api = "https://marketplace-api.wildberries.ru"
+        self.content_api = "https://content-api.wildberries.ru"
 
-    async def request(self, endpoint: str, method: str = "GET", **kwargs) -> dict:
-        url = f"{self.base_url}{endpoint}"
-        logger.info(f"Обращение к эндпоинту: {method} {url}")
-        
+    def ping(self):
+        self.logger.info("Проверка доступности API (ping)...")
+        for name, url in [("Marketplace", f"{self.marketplace_api}/ping"), ("Content", f"{self.content_api}/ping")]:
+            try:
+                r = self.session.get(url, timeout=10)
+                r.raise_for_status()
+                self.logger.info(f"{name} API ping OK: {r.status_code}")
+            except Exception as e:
+                self.logger.error(f"{name} API ping failed: {e}")
+
+    def _save_response(self, endpoint: str, data: dict | list | str, status_code: int):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_endpoint = endpoint.replace("/", "_").strip("_")
+        filepath = self.config.responses_dir / f"{timestamp}_{safe_endpoint}_{status_code}.json"
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def request(self, method: str, url: str, endpoint_name: str, **kwargs) -> dict | list | None:
         delays = list(self.config.retry_delays_sec)
         attempt = 0
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            while True:
-                try:
-                    if method == "GET":
-                        response = await client.get(url, headers=self.headers, **kwargs)
-                    elif method == "POST":
-                        response = await client.post(url, headers=self.headers, **kwargs)
+        while True:
+            self.logger.info(f"Запрос {method} {url} ({endpoint_name})")
+            try:
+                response = self.session.request(method, url, timeout=60, **kwargs)
+                
+                if response.status_code == 429:
+                    if attempt < len(delays):
+                        delay = delays[attempt]
                     else:
-                        raise ValueError(f"Unsupported method: {method}")
-
-
+                        # Умножаем на 2 после исхождения стандартного списка
+                        delay = delays[-1] * (2 ** (attempt - len(delays) + 1))
                     
-                    if response.status_code == 429:
-                        if attempt < len(delays):
-                            delay = delays[attempt]
-                        else:
-                            # Умножаем последний элемент на 2 (2мин -> 30м -> 1ч -> 2ч -> 4ч -> 8ч...)
-                            delay = delays[-1] * (2 ** (attempt - len(delays) + 1))
-                            delay = min(delay, self.config.max_retry_sec)
-                            
-                        logger.warning(f"Статус 429 (Too Many Requests). Пауза {delay} сек перед повтором...")
-                        await asyncio.sleep(delay)
-                        attempt += 1
-                        continue
-                    if response.is_success:
-                        logger.info(f"✅ Успешный запрос: {method} {url} | Статус: {response.status_code}")
-
-                    
-                    response.raise_for_status()
-                    self._save_response(endpoint, response)
-                    return response.json()
-                    
-                except httpx.HTTPStatusError as e:
-                    logger.error(f"HTTP ошибка при запросе {url}: {e.response.status_code} - {e.response.text}")
-                    raise
-                except Exception as e:
-                    logger.error(f"Непредвиденная ошибка при запросе {url}: {e}")
-                    raise
-
-    def _save_response(self, endpoint: str, response: httpx.Response):
-        try:
-            safe_endpoint = endpoint.strip("/").replace("/", "_")
-            date_from = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-            filename = f"{safe_endpoint}_{date_from}.json"
-            filepath = self.responses_dir / filename
-            
-            with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(response.json(), f, ensure_ascii=False, indent=2)
-            logger.debug(f"Ответ сохранен: {filepath}")
-        except Exception as e:
-            logger.error(f"Не удалось сохранить ответ: {e}")
+                    delay = min(delay, self.config.max_retry_sec)
+                    self.logger.warning(f"429 Too Many Requests. Пауза {delay} сек...")
+                    self._save_response(endpoint_name, {"error": "429"}, response.status_code)
+                    time.sleep(delay)
+                    attempt += 1
+                    continue
+                
+                response.raise_for_status()
+                data = response.json()
+                self._save_response(endpoint_name, data, response.status_code)
+                return data
+                
+            except requests.exceptions.RequestException as e:
+                self.logger.error(f"Ошибка сети для {endpoint_name}: {e}")
+                self._save_response(endpoint_name, {"error": str(e)}, 500)
+                return None

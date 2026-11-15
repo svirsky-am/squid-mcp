@@ -1,47 +1,51 @@
 import pytest
-import httpx
-import respx
-import os
+import responses
+import logging
 from pathlib import Path
-from src.wb_client import WBClient
-from src.config import AppConfig
+from wb_client import WBClient
+from app_config import AppConfig
 
 @pytest.fixture
-def config(tmp_path):
-    os.environ["WORK_DIR"] = str(tmp_path)
-    os.environ["API_TOKEN"] = "test_token"
-    os.environ["FETCH_DATA"] = "false"
-    os.environ["RETRY_DELAY_0"] = "1" # Ускоряем тесты
-    os.environ["RETRY_DELAY_1"] = "2"
-    return AppConfig()
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_fetch_success(config):
-    client = WBClient(config)
-    mock_route = respx.get("https://marketplace-api.wildberries.ru/api/v3/orders").mock(
-        return_value=httpx.Response(200, json={"orders": []})
-    )
+def mock_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("API_TOKEN", "test_token")
+    monkeypatch.setenv("WORK_DIR", str(tmp_path))
     
-    result = await client.request("/api/v3/orders")
-    assert result == {"orders": []}
-    assert mock_route.called
+    config = AppConfig()
+    # Ускоряем ретраи для тестов
+    config.retry_delays_sec = [0.1, 0.2] 
+    config.max_retry_sec = 1
+    return config
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_fetch_429_retry(config):
-    client = WBClient(config)
+@pytest.fixture
+def mock_logger():
+    logger = logging.getLogger("test_wb_client")
+    logger.setLevel(logging.DEBUG)
+    return logger
+
+@responses.activate
+def test_ping_success(mock_config, mock_logger):
+    responses.add(responses.GET, "https://marketplace-api.wildberries.ru/ping", status=200)
+    responses.add(responses.GET, "https://content-api.wildberries.ru/ping", status=200)
     
-    route = respx.get("https://marketplace-api.wildberries.ru/api/v3/orders")
+    client = WBClient(mock_config, mock_logger)
+    client.ping()
+    
+    assert len(responses.calls) == 2
+
+@responses.activate
+def test_request_429_retry_logic(mock_config, mock_logger):
+    url = "https://marketplace-api.wildberries.ru/api/v3/orders"
+    
     # Первый запрос - 429, второй - 200 OK
-    route.side_effect = [
-        httpx.Response(429),
-        httpx.Response(200, json={"orders": [{"id": "123"}]})
-    ]
+    responses.add(responses.GET, url, status=429)
+    responses.add(responses.GET, url, json={"orders": [{"id": 123}]}, status=200)
     
-    result = await client.request("/api/v3/orders")
-    assert result == {"orders": [{"id": "123"}]}
-    assert route.call_count == 2
+    client = WBClient(mock_config, mock_logger)
+    data = client.request("GET", url, "v3_orders")
     
-    # Проверяем, что файл ответа сохранился в work_dir/responses
-    assert len(list(config.responses_dir.glob("*.json"))) == 1
+    assert data == {"orders": [{"id": 123}]}
+    assert len(responses.calls) == 2
+    
+    # Проверяем, что сырые ответы сохранились в work_dir/responses
+    saved_files = list(client.config.responses_dir.glob("*.json"))
+    assert len(saved_files) == 2

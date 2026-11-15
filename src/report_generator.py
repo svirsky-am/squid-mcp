@@ -1,51 +1,47 @@
 import pandas as pd
-import sqlite3
-import json
-from src.config import AppConfig
-from src.logger_setup import get_logger
+from datetime import datetime
+from sqlalchemy import create_engine
+from app_config import AppConfig
+import logging
 
-logger = get_logger(__name__)
-
-def generate_report():
-    config = AppConfig()
-    logger.info("Формирование сводного отчета XLSX...")
-    
-    conn = sqlite3.connect(config.db_path)
-    df_orders = pd.read_sql_query("SELECT raw_json FROM orders", conn)
-    
-    if df_orders.empty:
-        logger.warning("В базе нет данных для отчета.")
-        conn.close()
-        return
+def generate_summary_report(config: AppConfig, logger: logging.Logger = None):
+    if not logger:
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger("report_generator")
         
-    orders_data = [json.loads(row['raw_json']) for _, row in df_orders.iterrows()]
-    df = pd.json_normalize(orders_data)
+    logger.info("Чтение данных из БД для сводного отчета...")
+    engine = create_engine(config.database_url)
     
-    # Маппинг колонок под ваш шаблон (адаптируйте под реальные поля API v3)
-    mapping = {
-        'createdAt': 'Дата создания',
-        'id': 'Номер заказа',
-        'trackingNumber': 'Номер отправления (ШК)',
-        'status': 'Статус',
-        'price': 'Стоимость',
-        'article': 'Артикул продавца',
-        'nmId': 'Артикул WB',
-    }
-    
-    df_report = df.rename(columns=mapping)
-    cols = [c for c in mapping.values() if c in df_report.columns]
-    df_report = df_report[cols]
-    
-    out_dir = config.work_dir / "reports"
-    out_dir.mkdir(exist_ok=True, parents=True)
-    out_file = out_dir / "wb_summary_report.xlsx"
-    
-    # Запись в Excel
-    with pd.ExcelWriter(out_file, engine='openpyxl') as writer:
-        df_report.to_excel(writer, index=False, sheet_name="Реестр ВБ")
+    try:
+        # Читаем таблицы (в реальном проекте здесь будет сложный JOIN и маппинг полей)
+        df_orders = pd.read_sql_table("orders", engine)
+        df_cards = pd.read_sql_table("cards", engine)
         
-    logger.info(f"Сводный отчет сохранен: {out_file}")
-    conn.close()
+        # Заготовка под ваш формат "Реестр ВБ"
+        report_data = {
+            "Дата отчета": [datetime.now().strftime("%d.%m.%Y")] * len(df_orders),
+            "ИП": ["ИП Олейник"] * len(df_orders),
+            "Номер заказа": df_orders['order_uid'] if not df_orders.empty else [],
+            "Статус": ["Доставляется"] * len(df_orders),
+            "Артикул WB": ["-"] * len(df_orders),
+            "Название товара": ["Товар из БД"] * len(df_orders),
+        }
+        
+        df_report = pd.DataFrame(report_data)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        report_path = config.work_dir / f"WB_Summary_Report_{timestamp}.xlsx"
+        
+        with pd.ExcelWriter(report_path, engine="openpyxl") as writer:
+            df_report.to_excel(writer, sheet_name="Реестр ВБ", index=False)
+            # Можно добавить лист с карточками
+            if not df_cards.empty:
+                df_cards.to_excel(writer, sheet_name="Карточки", index=False)
+            
+        logger.info(f"Сводный отчет успешно сохранен: {report_path}")
+    except Exception as e:
+        logger.error(f"Ошибка формирования XLSX: {e}")
 
 if __name__ == "__main__":
-    generate_report()
+    # Точка входа для запуска ВНЕ сервиса (через justfile generate-report)
+    config = AppConfig()
+    generate_summary_report(config)

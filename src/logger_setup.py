@@ -1,30 +1,20 @@
 import logging
 import sys
-from pathlib import Path
-from src.config import AppConfig
+from app_config import AppConfig
 
-def get_logger(name: str) -> logging.Logger:
-    config = AppConfig()
-    config.logs_dir.mkdir(parents=True, exist_ok=True)
-    log_file = config.logs_dir / "msp_service.log"
+def setup_logger(config: AppConfig) -> logging.Logger:
+    logger = logging.getLogger("wb_msp")
+    logger.setLevel(logging.INFO)
     
-    logger = logging.getLogger(name)
+    log_file = config.logs_dir / "service.log"
+    fh = logging.FileHandler(log_file, encoding='utf-8')
+    ch = logging.StreamHandler(sys.stdout)
     
-    if not logger.hasHandlers():
-        logger.setLevel(logging.INFO)
-        
-        # File handler
-        fh = logging.FileHandler(log_file, encoding='utf-8')
-        fh.setLevel(logging.INFO)
-        
-        # Console handler
-        ch = logging.StreamHandler(sys.stdout)
-        ch.setLevel(logging.INFO)
-        
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        fh.setFormatter(formatter)
-        ch.setFormatter(formatter)
-        
+    formatter = logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+    
+    if not logger.handlers:
         logger.addHandler(fh)
         logger.addHandler(ch)
         
