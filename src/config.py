@@ -1,16 +1,12 @@
 """Конфигурация приложения.
-
 Подход прежний: датакласс AppConfig + переопределение значений
 переменными окружения (секреты и параметры — в .staff/env).
 """
-
 from __future__ import annotations
-
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
-
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -18,14 +14,12 @@ def _env_bool(name: str, default: bool) -> bool:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on", "да"}
 
-
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     try:
         return int(raw.strip()) if raw and raw.strip() else default
     except ValueError:
         return default
-
 
 @dataclass
 class AppConfig:
@@ -39,10 +33,8 @@ class AppConfig:
     work_dir: Path = field(
         default_factory=lambda: Path(os.getenv("WORK_DIR", "work_dir")).resolve()
     )
-
     # Глобальный тумблер: не ходить в сеть, работать только с кешем и БД
     fetch_data: bool = field(default_factory=lambda: _env_bool("FETCH_DATA", True))
-
     # Периодический fetch в службе
     fetch_interval_minutes: int = field(
         default_factory=lambda: _env_int("FETCH_INTERVAL_MINUTES", 30)
@@ -53,14 +45,12 @@ class AppConfig:
     )
     # Глубина выгрузки за один проход (в сутках)
     lookback_days: int = field(default_factory=lambda: _env_int("LOOKBACK_DAYS", 30))
-
     # Эндпойнты, которые тянет пул fetch-потоков
     endpoints: List[str] = field(
         default_factory=lambda: os.getenv(
             "WB_ENDPOINTS", "orders,sales,incomes,stocks,warehouses"
         ).split(",")
     )
-
     # Задержки при 429: 2 мин, 30 мин, 1 час, 2 часа, 4 часа, далее удвоение
     retry_delays_sec: List[int] = field(
         default_factory=lambda: [
@@ -69,19 +59,16 @@ class AppConfig:
         ]
     )
     max_retry_sec: int = field(default_factory=lambda: _env_int("MAX_RETRY_SEC", 24 * 3600))
-
     # Дублирование/правка карточек: 1 — слать в песочницу контента
     use_sandbox_update: bool = field(
         default_factory=lambda: _env_bool("USE_SANDBOX_UPDATE", False)
     )
-
     # Google Drive
     gdrive_enabled: bool = field(default_factory=lambda: _env_bool("GDRIVE_ENABLED", False))
     gdrive_folder_id: str = field(default_factory=lambda: os.getenv("GDRIVE_FOLDER_ID", ""))
     gdrive_service_account_file: str = field(
         default_factory=lambda: os.getenv("GDRIVE_SA_FILE", "")
     )
-
     db_filename: str = "wb.db"
     responses_dirname: str = "responses"
     logs_dirname: str = "logs"

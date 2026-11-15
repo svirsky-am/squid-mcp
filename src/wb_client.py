@@ -1,12 +1,15 @@
 import httpx
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from src.logger_setup import get_logger
 from src.config import AppConfig
 
 logger = get_logger(__name__)
+
+MARKETPLACE_API_URL = "https://marketplace-api.wildberries.ru"
+CONTENT_API_URL = "https://content-api.wildberries.ru"
 
 class WBClient:
     def __init__(self, config: AppConfig):
@@ -32,7 +35,9 @@ class WBClient:
                         response = await client.post(url, headers=self.headers, **kwargs)
                     else:
                         raise ValueError(f"Unsupported method: {method}")
-                        
+
+
+                    
                     if response.status_code == 429:
                         if attempt < len(delays):
                             delay = delays[attempt]
@@ -45,7 +50,10 @@ class WBClient:
                         await asyncio.sleep(delay)
                         attempt += 1
                         continue
-                        
+                    if response.is_success:
+                        logger.info(f"✅ Успешный запрос: {method} {url} | Статус: {response.status_code}")
+
+                    
                     response.raise_for_status()
                     self._save_response(endpoint, response)
                     return response.json()
@@ -60,8 +68,8 @@ class WBClient:
     def _save_response(self, endpoint: str, response: httpx.Response):
         try:
             safe_endpoint = endpoint.strip("/").replace("/", "_")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{safe_endpoint}_{timestamp}.json"
+            date_from = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            filename = f"{safe_endpoint}_{date_from}.json"
             filepath = self.responses_dir / filename
             
             with open(filepath, "w", encoding="utf-8") as f:
