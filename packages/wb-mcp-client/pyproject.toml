@@ -7,7 +7,9 @@ authors = [
     { name = "Svirsky Alexey", email = "aouta91alk@gmail.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "httpx>=0.28.1",
+]
 
 [project.scripts]
 wb-mcp-client = "wb_mcp_client:main"
@@ -18,5 +20,16 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "anyio>=4.16.0",
     "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "pytest-tornasync>=0.6.0.post2",
+    "pytest-trio>=0.8.0",
+    "pytest-twisted>=1.14.3",
+    "twisted>=26.10.0",
 ]
+
+#чтобы не писать декоратор @pytest.mark.asyncio над каждым тестом
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
