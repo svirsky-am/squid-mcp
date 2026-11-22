@@ -1,0 +1,22 @@
+[project]
+name = "wb-mcp-server"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Svirsky Alexey", email = "aouta91alk@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+#[project.scripts]
+#wb-mcp-server = "wb_mcp_server:main"
+[project.scripts]
+wb-mcp-server = "wb_mcp_server.server:main"
+
+
+[build-system]
+requires = ["uv_build>=0.11.26,<0.12.0"]
+build-backend = "uv_build"
+
+

@@ -4,3 +4,11 @@ run-module:
 
 run-clietn-test:
     uv run --package wb-mcp-client pytest
+
+install-all-packages:
+    uv sync --all-packages
+
+
+
+run-client:
+    uv run --package wb-mcp-client python packages/wb-mcp-client/src/wb_mcp_client/client.py   
