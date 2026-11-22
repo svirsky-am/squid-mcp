@@ -11,4 +11,8 @@ install-all-packages:
 
 
 run-client:
-    uv run --package wb-mcp-client python packages/wb-mcp-client/src/wb_mcp_client/client.py   
+    uv run --package wb-mcp-client python packages/wb-mcp-client/src/wb_mcp_client/client.py   \
+
+
+run-mcp-server:
+    uv run --package wb-mcp-server wb-mcp-server

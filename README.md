@@ -17,4 +17,8 @@ uv add --package wb-mcp-client --dev pytest anyio pytest-asyncio pytest-tornasyn
 ```
 
 # 1. Создайте пакет MCP-сервера в workspace
-
+```sh
+/etc/systemd/system/wb-mcp.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now wb-mcp
+```

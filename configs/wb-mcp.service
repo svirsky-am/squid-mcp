@@ -1,0 +1,15 @@
+[Unit]
+Description=WB MCP Server for Alice
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/wb-alice-tool
+Environment="MCP_DOMAIN=mcp.ваш-домен.ru"
+Environment="MCP_BEARER_TOKEN=ваш_длинный_секретный_токен"
+ExecStart=/home/ubuntu/.local/bin/uv run --package wb-mcp-server wb-mcp-server
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
