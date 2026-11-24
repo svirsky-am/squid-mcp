@@ -1,0 +1,122 @@
+import json
+import sqlite3
+import threading
+from pathlib import Path
+from typing import Any, Dict, List
+
+
+class Database:
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
+        self._write_lock = threading.Lock()
+        self._init_schema()
+
+    def connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        return conn
+
+    def _init_schema(self) -> None:
+        with self._write_lock, self.connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fbs_orders (
+                    id INTEGER PRIMARY KEY,
+                    order_uid TEXT,
+                    rid TEXT,
+                    created_at TEXT,
+                    article TEXT,
+                    nm_id INTEGER,
+                    chrt_id INTEGER,
+                    sku TEXT,
+                    price REAL,
+                    converted_price REAL,
+                    currency_code INTEGER,
+                    converted_currency_code INTEGER,
+                    delivery_type TEXT,
+                    supply_id TEXT,
+                    warehouse_id INTEGER,
+                    office_id INTEGER,
+                    cargo_type INTEGER,
+                    is_zero_order INTEGER,
+                    supplier_status TEXT,
+                    wb_status TEXT,
+                    raw_json TEXT,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_fbs_orders_created_at ON fbs_orders(created_at);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_fbs_orders_article ON fbs_orders(article);")
+            conn.commit()
+
+    def upsert_orders(self, orders: List[Dict[str, Any]]) -> int:
+        if not orders:
+            return 0
+
+        rows = []
+        for o in orders:
+            skus = o.get("skus") or []
+            rows.append(
+                (
+                    o["id"],
+                    o.get("orderUid"),
+                    o.get("rid"),
+                    o.get("createdAt"),
+                    o.get("article"),
+                    o.get("nmId"),
+                    o.get("chrtId"),
+                    skus[0] if skus else None,
+                    o.get("price"),
+                    o.get("convertedPrice"),
+                    o.get("currencyCode"),
+                    o.get("convertedCurrencyCode"),
+                    o.get("deliveryType"),
+                    o.get("supplyId"),
+                    o.get("warehouseId"),
+                    o.get("officeId"),
+                    o.get("cargoType"),
+                    1 if o.get("isZeroOrder") else 0,
+                    json.dumps(o, ensure_ascii=False),
+                )
+            )
+
+        with self._write_lock, self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO fbs_orders (
+                    id, order_uid, rid, created_at, article, nm_id, chrt_id, sku,
+                    price, converted_price, currency_code, converted_currency_code,
+                    delivery_type, supply_id, warehouse_id, office_id, cargo_type,
+                    is_zero_order, raw_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    supply_id = excluded.supply_id,
+                    price = excluded.price,
+                    converted_price = excluded.converted_price,
+                    delivery_type = excluded.delivery_type,
+                    raw_json = excluded.raw_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                rows,
+            )
+            conn.commit()
+        return len(rows)
+
+    def update_order_statuses(self, statuses: List[Dict[str, Any]]) -> int:
+        if not statuses:
+            return 0
+        rows = [(s.get("supplierStatus"), s.get("wbStatus"), s["id"]) for s in statuses]
+        with self._write_lock, self.connect() as conn:
+            conn.executemany(
+                """
+                UPDATE fbs_orders
+                SET supplier_status = ?, wb_status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                rows,
+            )
+            conn.commit()
+        return len(rows)

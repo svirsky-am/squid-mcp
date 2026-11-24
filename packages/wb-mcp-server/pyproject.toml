@@ -7,7 +7,10 @@ authors = [
     { name = "Svirsky Alexey", email = "aouta91alk@gmail.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "google-api-python-client>=2.202.0",
+    "google-auth>=2.63.1",
+]
 
 #[project.scripts]
 #wb-mcp-server = "wb_mcp_server:main"

@@ -16,3 +16,7 @@ run-client:
 
 run-mcp-server:
     uv run --package wb-mcp-server wb-mcp-server
+
+
+gen-report:
+    uv run --package wb-mcp-client wb-report

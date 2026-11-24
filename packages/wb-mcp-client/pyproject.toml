@@ -10,10 +10,13 @@ requires-python = ">=3.14"
 dependencies = [
     "httpx>=0.28.1",
     "mcp>=2.3.0",
+    "openpyxl>=3.1.5",
 ]
 
 [project.scripts]
 wb-mcp-client = "wb_mcp_client:main"
+wb-collector = "wb_mcp_client.service:main"
+wb-report = "wb_mcp_client.report:main"
 
 [build-system]
 requires = ["uv_build>=0.11.26,<0.12.0"]
