@@ -5,8 +5,17 @@ from concurrent.futures import ThreadPoolExecutor
 from wb_mcp_client.app_config import AppConfig
 from wb_mcp_client.db import Database
 from wb_mcp_client.logger import setup_logger
-from wb_mcp_client.report import build_excel_report_general
+from wb_mcp_client.report import build_and_upload_report
 from wb_mcp_client.wb_client import WBApiClient
+
+
+from pathlib import Path
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+SCOPES = ["https://googleapis.com"]
 
 
 class WBCollectorService:
@@ -36,14 +45,14 @@ class WBCollectorService:
 
             # После fetch запускаем построение сводного отчёта по данным из SQLite
             if not self.stop_event.is_set():
-                build_excel_report_general(self.config, self.logger)
+                build_and_upload_report(self.config, self.logger)
         except Exception:
             self.logger.exception("Ошибка в задаче _task_fetch_orders")
 
     def _task_build_report(self) -> None:
         try:
             self.logger.info("Периодический запуск построения сводного отчёта xlsx")
-            build_excel_report_general(self.config, self.logger)
+            build_and_upload_report(self.config, self.logger)
         except Exception:
             self.logger.exception("Ошибка при построении сводного отчёта")
 
@@ -92,6 +101,34 @@ class WBCollectorService:
             self.executor.shutdown(wait=True, cancel_futures=True)
             self.client.close()
             self.logger.info("Служба остановлена.")
+
+
+    def _upload_to_gdrive(self, report_path: Path) -> None:
+        creds = service_account.Credentials.from_service_account_file(
+            str(self.config.google_credentials_path), scopes=SCOPES
+        )
+        drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+        metadata = {
+            "name": report_path.name,
+            "parents": [self.config.google_drive_folder_id],
+        }
+        media = MediaFileUpload(str(report_path), mimetype=XLSX_MIME, resumable=True)
+        uploaded = (
+            drive.files()
+            .create(body=metadata, media_body=media, fields="id, name, webViewLink", supportsAllDrives=True)
+            .execute()
+        )
+        self.logger.info(
+            "Отчёт загружен на Google Диск: %s (id=%s, link=%s)",
+            uploaded.get("name"),
+            uploaded.get("id"),
+            uploaded.get("webViewLink"),
+        )
+
+    def _build_and_maybe_upload_report(self) -> None:
+        report_path = build_excel_report_general(self.config, logger=self.logger)
+        if self.config.enable_gdrive_upload and not self.stop_event.is_set():
+            self._upload_to_gdrive(report_path)
 
 
 def main() -> None:

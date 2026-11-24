@@ -32,7 +32,15 @@ class AppConfig:
     lookback_days: int = field(default_factory=lambda: _env_int("LOOKBACK_DAYS", 30))
     max_workers: int = field(default_factory=lambda: _env_int("MAX_WORKERS", 4))
 
-    # 2 мин, 30 мин, 1 час, 2 часа, 4 часа (далее умножение на 2 до max_retry_sec)
+    # Настройки загрузки отчётов на Google Диск
+    enable_gdrive_upload: bool = field(default_factory=lambda: _env_bool("ENABLE_GDRIVE_UPLOAD", False))
+    google_credentials_path: Optional[Path] = field(
+        default_factory=lambda: Path(os.getenv("GOOGLE_CREDENTIALS_PATH")).resolve()
+        if os.getenv("GOOGLE_CREDENTIALS_PATH", "").strip()
+        else None
+    )
+    google_drive_folder_id: str = field(default_factory=lambda: os.getenv("GOOGLE_DRIVE_FOLDER_ID", "").strip())
+
     retry_delays_sec: List[int] = field(default_factory=lambda: list((120, 1800, 3600, 7200, 14400)))
     max_retry_sec: int = field(default_factory=lambda: _env_int("MAX_RETRY_SEC", 24 * 3600))
 
@@ -46,8 +54,24 @@ class AppConfig:
         self.responses_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
+
         if not self.api_token:
             raise ValueError("API_TOKEN не задан: заполните .staff/env или переменные окружения")
+
+        if self.enable_gdrive_upload:
+            if not self.google_credentials_path:
+                raise ValueError(
+                    "ENABLE_GDRIVE_UPLOAD=True, но не задан путь к ключу GOOGLE_CREDENTIALS_PATH"
+                )
+            self.google_credentials_path = Path(self.google_credentials_path).resolve()
+            if not self.google_credentials_path.exists():
+                raise FileNotFoundError(
+                    f"Файл ключа Google Service Account не найден: {self.google_credentials_path}"
+                )
+            if not self.google_drive_folder_id:
+                raise ValueError(
+                    "ENABLE_GDRIVE_UPLOAD=True, но не задан ID папки GOOGLE_DRIVE_FOLDER_ID"
+                )
 
     @property
     def db_path(self) -> Path:

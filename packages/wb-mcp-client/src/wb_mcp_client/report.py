@@ -13,6 +13,13 @@ from wb_mcp_client.app_config import AppConfig
 from wb_mcp_client.db import Database
 from wb_mcp_client.logger import setup_logger
 
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+SCOPES = ["https://googleapis.com"]
+
 TIMESTAMP_FMT = "%Y.%m.%d_%H.%M.%S"
 
 SUPPLIER_STATUS_LABELS = {
@@ -43,6 +50,62 @@ TOTAL_FONT = Font(bold=True)
 THIN_SIDE = Side(style="thin", color="D9D9D9")
 CELL_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN_SIDE)
 
+
+def upload_report_file(
+    report_path: Path,
+    credentials_path: Path,
+    folder_id: str,
+    logger: Optional[logging.Logger] = None,
+) -> Dict[str, Any]:
+    """Загружает готовый .xlsx файл на Google Диск без конвертации в Google Таблицы."""
+    log = logger or logging.getLogger("wb_report_general")
+    creds = service_account.Credentials.from_service_account_file(
+        str(credentials_path), scopes=SCOPES
+    )
+    drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+    metadata: Dict[str, Any] = {"name": report_path.name}
+    if folder_id:
+        metadata["parents"] = [folder_id]
+
+    media = MediaFileUpload(str(report_path), mimetype=XLSX_MIME, resumable=True)
+    uploaded = (
+        drive.files()
+        .create(
+            body=metadata,
+            media_body=media,
+            fields="id, name, webViewLink",
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
+    log.info(
+        "Отчёт загружен на Google Диск: %s (id=%s, link=%s)",
+        uploaded.get("name"),
+        uploaded.get("id"),
+        uploaded.get("webViewLink"),
+    )
+    return uploaded
+
+
+def build_and_upload_report(
+    config: AppConfig,
+    seller_name: str = "ИП (WB)",
+    logger: Optional[logging.Logger] = None,
+) -> Path:
+    """Строит общий Excel-отчёт и при включённом флаге в конфиге загружает его на Google Диск."""
+    log = logger or setup_logger(config.logs_dir, name="wb_report_general")
+    report_path = build_excel_report_general(config, seller_name=seller_name, logger=log)
+
+    if config.enable_gdrive_upload and config.google_credentials_path:
+        upload_report_file(
+            report_path=report_path,
+            credentials_path=config.google_credentials_path,
+            folder_id=config.google_drive_folder_id,
+            logger=log,
+        )
+
+    return report_path
 
 def _human_status(supplier_status: Optional[str], wb_status: Optional[str]) -> str:
     if wb_status == "sold":
@@ -434,9 +497,8 @@ def build_excel_report_general(
 
 def main() -> None:
     config = AppConfig()
-    report_path = build_excel_report_general(config)
+    report_path = build_and_upload_report(config)
     print(f"Отчёт сохранён: {report_path}")
-
 
 if __name__ == "__main__":
     main()
