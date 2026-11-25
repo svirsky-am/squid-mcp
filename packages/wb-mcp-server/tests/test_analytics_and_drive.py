@@ -26,8 +26,11 @@ def sample_work_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     report_file = reports_dir / "wb_general_report_2026.11.25_00.00.00.xlsx"
     report_file.write_bytes(b"PK\x03\x04fake-xlsx-content")
 
-    creds_file = tmp_path / "service_account.json"
-    creds_file.write_text('{"type": "service_account"}', encoding="utf-8")
+    creds_file = tmp_path / "gdrive_token.json"
+    creds_file.write_text(
+        '{"type": "authorized_user", "client_id": "cid", "client_secret": "csec", "refresh_token": "rtok"}',
+        encoding="utf-8",
+    )
     monkeypatch.setenv("GOOGLE_CREDENTIALS_PATH", str(creds_file))
     monkeypatch.setenv("GOOGLE_DRIVE_FOLDER_ID", "test-folder-123")
 
@@ -84,9 +87,15 @@ def sample_work_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def mock_gdrive_api(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     mock_creds = MagicMock()
+    mock_creds.expired = False
+    monkeypatch.setattr(
+        gdrive_mod.user_credentials.Credentials,
+        "from_authorized_user_info",
+        lambda *args, **kwargs: mock_creds,
+    )
     monkeypatch.setattr(
         gdrive_mod.service_account.Credentials,
-        "from_service_account_file",
+        "from_service_account_info",
         lambda *args, **kwargs: mock_creds,
     )
 
