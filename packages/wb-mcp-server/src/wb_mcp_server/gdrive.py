@@ -6,9 +6,22 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-SCOPES = ["https://googleapis.com"]
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
+import json
+from google.auth.transport.requests import Request
+from google.oauth2 import credentials as user_credentials
+from google.oauth2 import service_account
+
+def _load_drive_credentials(creds_path: Path):
+    info = json.loads(creds_path.read_text(encoding="utf-8"))
+    if info.get("type") == "authorized_user":
+        creds = user_credentials.Credentials.from_authorized_user_info(info, scopes=SCOPES)
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        return creds
+    return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
 
 def get_latest_report(reports_dir: Path) -> Path:
     files = sorted(reports_dir.glob("*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
