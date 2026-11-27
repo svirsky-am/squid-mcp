@@ -1,0 +1,11 @@
+API_TOKEN="ваш_токен_wb"
+WORK_DIR="/app/work_dir"
+
+# Настройки Google Диска
+ENABLE_GDRIVE_UPLOAD=true
+GOOGLE_CREDENTIALS_PATH="/app/.staff/gdrive_token.json"
+GOOGLE_DRIVE_FOLDER_ID="1V6W_-OqoYov5PkC78mwV6MxGU0EkjldH"
+
+# Настройки MCP-сервера для Алисы
+MCP_DOMAIN="market-squid-mcp.ru"
+MCP_BEARER_TOKEN="ваш_длинный_секретный_токен_для_алисы"
