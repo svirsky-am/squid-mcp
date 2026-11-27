@@ -1,3 +1,5 @@
+market-squid-mcp
+
 
 # Examples
 ```

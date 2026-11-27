@@ -55,14 +55,25 @@ THIN_SIDE = Side(style="thin", color="D9D9D9")
 CELL_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN_SIDE)
 
 
-def _load_drive_credentials(creds_path: Path):
-    info = json.loads(creds_path.read_text(encoding="utf-8"))
-    if info.get("type") == "authorized_user":
+def _load_drive_credentials(credentials_path: Path):
+    info = json.loads(credentials_path.read_text(encoding="utf-8"))
+    cred_type = info.get("type")
+
+    if cred_type == "authorized_user" or ("refresh_token" in info and "client_id" in info):
         creds = user_credentials.Credentials.from_authorized_user_info(info, scopes=SCOPES)
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
+            updated = json.loads(creds.to_json())
+            updated.setdefault("type", "authorized_user")
+            credentials_path.write_text(json.dumps(updated, indent=2), encoding="utf-8")
         return creds
-    return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+
+    if cred_type == "service_account":
+        return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+
+    raise ValueError(
+        f"Неподдерживаемый тип ключа Google ({cred_type!r}) в файле {credentials_path}."
+    )
 
 def upload_report_file(
     report_path: Path,
@@ -72,9 +83,7 @@ def upload_report_file(
 ) -> Dict[str, Any]:
     """Загружает готовый .xlsx файл на Google Диск без конвертации в Google Таблицы."""
     log = logger or logging.getLogger("wb_report_general")
-    creds = service_account.Credentials.from_service_account_file(
-        str(credentials_path), scopes=SCOPES
-    )
+    creds = _load_drive_credentials(Path(credentials_path))
     drive = build("drive", "v3", credentials=creds, cache_discovery=False)
 
     metadata: Dict[str, Any] = {"name": report_path.name}
@@ -99,8 +108,6 @@ def upload_report_file(
         uploaded.get("webViewLink"),
     )
     return uploaded
-
-
 def build_and_upload_report(
     config: AppConfig,
     seller_name: str = "ИП (WB)",
