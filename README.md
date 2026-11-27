@@ -1,58 +1,106 @@
-market-squid-mcp
+# squid-mcp
 
+Монорепозиторий (`uv` workspace) для автоматического сбора аналитики Wildberries (FBS), формирования многостраничных Excel-отчётов с выгрузкой на Google Диск и предоставления доступа к данным через чат **Яндекс Алисы** по протоколу **MCP (Streamable HTTP)**.
 
-# Examples
+---
+
+## Архитектура и структура репозитория
+
+```text
+squid-mcp/
+├── .agents/skills/
+│   ├── wb-fbs-analytics/SKILL.md     # Навык для пользователей / агента Yandex AI Studio
+│   └── squid-mcp-devops/SKILL.md     # Навык для разработчиков и сопровождения (DevOps)
+├── .github/workflows/deploy.yml      # CI/CD: прогон pytest и автодеплой на VPS
+├── configs/
+│   └── Caddyfile                     # HTTPS-терминатор на порту 443 для Streamable HTTP
+├── docs/
+│   ├── deploy_and_alice.md           # Развёртывание на VPS (порт 443) и подключение к Алисе
+│   ├── gdrive_auth.md                # Настройка Google Cloud и получение gdrive_token.json
+│   └── alice_agent_skills.md         # Системный промпт и сценарии агента в Agent Atelier
+├── packages/
+│   ├── wb-mcp-client/                # Сборщик данных WB API, SQLite (WAL) и генератор .xlsx
+│   └── wb-mcp-server/                # MCP-сервер (mcp 2.x, Streamable HTTP + Bearer Auth)
+├── tools/
+│   └── generate_gdrive_token.py      # CLI-утилита генерации OAuth-токена Google Диска
+├── .staff/                           # (в .gitignore) Секреты, .staff/env, токены и SSL PEM
+├── work_dir/                         # (в .gitignore) База wb.db, логи, сырые JSON и отчёты
+├── AGENTS.md                         # Правила и соглашения репозитория для ИИ-агентов
+├── Dockerfile                        # Сборка Python-образа с uv (--no-lock)
+└── docker-compose.yml                # Оркестрация wb-collector, wb-mcp-server и caddy
 ```
-uv init --lib packages/shared-lib
-uv init --app packages/api-service
 
-```
-## example add uv package 
+---
 
+## Быстрый старт (локальная разработка)
 
-```sh 
+1. **Установите зависимости workspace:**
+   ```bash
+   uv sync --all-packages
+   ```
 
-uv add --package wb-mcp-client --dev pytest
-uv add --package wb-mcp-client httpx
-uv add --package wb-mcp-client --dev pytest anyio pytest-asyncio pytest-tornasync pytest-trio pytest-twisted
-uv add --package wb-mcp-server google-api-python-client google-auth
-uv add --package wb-mcp-server --dev pytest pytest-asyncio httpx2
-```
+2. **Подготовьте переменные окружения в `.staff/env`:**
+   ```env
+   API_TOKEN="ваш_токен_wildberries"
+   WORK_DIR="work_dir"
 
-# 1. Создайте пакет MCP-сервера в workspace
-```sh
-/etc/systemd/system/wb-mcp.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now wb-mcp
-```
+   ENABLE_GDRIVE_UPLOAD=true
+   GOOGLE_CREDENTIALS_PATH=".staff/gdrive_token.json"
+   GOOGLE_DRIVE_FOLDER_ID="ваш_id_папки_google_drive"
 
+   MCP_DOMAIN="market-squid-mcp.ru"
+   MCP_BEARER_TOKEN="ваш_секретный_токен_для_алисы"
+   ```
 
+3. **Запустите тесты:**
+   ```bash
+   uv run pytest -v
+   ```
 
-# Подключение диска
+---
 
-Как настроить доступ со стороны Google: в Google Cloud Console включите Google Drive API, создайте Service Account, скачайте его JSON-ключ на сервер и расшарьте нужную папку на Google Диске на email этого сервисного аккаунта с правами «Редактор»
+## Основные команды
 
-Чтобы настроить Service Account для работы с Google Drive API, выполните следующие шаги в Google Cloud Console:
-1. Создайте проект и включите API
-	• Откройте Google Cloud Console и выберите или создайте проект.
-	• Перейдите в APIs & Services → Library, найдите Google Drive API и нажмите Enable. [1] (https://support.google.com/workspacemigrate/answer/10839762?hl=ru), [2] (https://docs.cloud.google.com/iam/docs/keys-create-delete), [3] (https://docs.ispring.ru/pages/viewpage.action?pageId=119866165)
-2. Создайте сервисный аккаунт
-	• Перейдите в IAM & Admin → Service Accounts (или APIs & Services → Credentials → Create Credentials → Service account).
-	• Нажмите Create Service Account, укажите имя (Service account name) и ID, при необходимости задайте роли и нажмите Done. [1] (https://developers.google.com/workspace/guides/create-credentials), [2] (https://knowledge.workspace.google.com/admin/users/create-a-service-account?hl=ru), [3] (https://osipenkov.ru/create-service-account/), [4] (https://docs.ispring.ru/pages/viewpage.action?pageId=119866165), [5] (https://support.google.com/workspacemigrate/answer/10839762?hl=ru)
-3. Скачайте JSON-ключ
-	• Нажмите на email созданного сервисного аккаунта и откройте вкладку Keys.
-	• Выберите Add key → Create new key, укажите тип JSON и нажмите Create — файл ключа скачается на компьютер. [1] (https://osipenkov.ru/create-service-account/), [2] (https://docs.cloud.google.com/iam/docs/keys-create-delete)
-4. Выдайте доступ к нужным папкам или файлам на Google Диске
-	• Скопируйте email сервисного аккаунта (вида имя@://gserviceaccount.com).
-	• В Google Диске откройте «Поделиться» для нужной папки или файла и добавьте этот email с правами Редактор или Читатель (иначе аккаунт увидит только файлы, созданные им самим). Для ресурсов Google Workspace может также потребоваться настройка делегирования полномочий в масштабе домена (Domain-wide delegation). [1] (https://developers.google.com/workspace/guides/create-credentials)
-Уточните, пожалуйста:
-• На каком языке или платформе вы пишете интеграцию (например, Python, Node.js, Apps Script)?
-• Нужно ли работать с личным Google Диском или с общими дисками / доменом Google Workspace?
-Это поможет дать готовый пример кода и подсказать нужные настройки прав.
-
-
-Перезапуск переменных
-```sh
+```bash
+# Фоновый сборщик заказов WB API -> SQLite -> Excel -> Google Диск
 set -a && source .staff/env && set +a
+uv run --package wb-mcp-client wb-collector
 
-``
+# Ручная генерация сводного Excel-отчёта (и выгрузка на диск при ENABLE_GDRIVE_UPLOAD=true)
+uv run --package wb-mcp-client wb-report
+
+# Ручная выгрузка последнего готового .xlsx на Google Диск без пересборки
+uv run --package wb-mcp-server wb-upload-gdrive
+
+# Генерация OAuth-токена Google Диска из oauth_client.json
+uv run --package wb-mcp-client python tools/generate_gdrive_token.py
+
+# Запуск MCP-сервера локально
+uv run --package wb-mcp-server wb-mcp-server
+```
+
+---
+
+## Развёртывание на сервере (Docker + Caddy на порту 443)
+
+1. Разместите на сервере в `.staff/` файлы `env`, `gdrive_token.json`, `target_host/cert.pem` и `target_host/key.pem`.
+2. Запустите стек контейнеров:
+   ```bash
+   docker compose up -d --build
+   ```
+3. Проверьте доступность MCP-эндпоинта (без токена должен вернуться статус `401 Unauthorized`):
+   ```bash
+   curl -i -X POST https://market-squid-mcp.ru
+   ```
+
+---
+
+## Документация и навыки
+
+* [Развёртывание на VPS (порт 443) и подключение к Яндекс Алисе](docs/deploy_and_alice.md)
+* [Настройка авторизации Google Drive и получение `gdrive_token.json`](docs/gdrive_auth.md)
+* [Инструкция и промпт агента для Yandex AI Studio](docs/alice_agent_skills.md)
+* [Руководство для ИИ-агентов (`AGENTS.md`)](AGENTS.md)
+* [Пользовательский навык аналитики WB FBS (`SKILL.md`)](.agents/skills/wb-fbs-analytics/SKILL.md)
+* [Навык разработки и эксплуатации (`SKILL.md`)](.agents/skills/squid-mcp-devops/SKILL.md)
+
