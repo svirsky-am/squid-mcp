@@ -45,14 +45,14 @@ class WBCollectorService:
 
             # После fetch запускаем построение сводного отчёта по данным из SQLite
             if not self.stop_event.is_set():
-                build_and_upload_report(self.config, self.logger)
+                build_and_upload_report(self.config, logger=self.logger)
         except Exception:
             self.logger.exception("Ошибка в задаче _task_fetch_orders")
 
     def _task_build_report(self) -> None:
         try:
             self.logger.info("Периодический запуск построения сводного отчёта xlsx")
-            build_and_upload_report(self.config, self.logger)
+            build_and_upload_report(self.config, logger=self.logger)
         except Exception:
             self.logger.exception("Ошибка при построении сводного отчёта")
 

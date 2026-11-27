@@ -1,0 +1,11 @@
+{
+    auto_https off
+}
+
+https://market-squid-mcp.ru:443 {
+    tls /app/.staff/target_host/cert.pem /app/.staff/target_host/key.pem
+
+    reverse_proxy wb-mcp-server:8000 {
+        flush_interval -1
+    }
+}

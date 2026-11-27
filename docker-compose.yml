@@ -1,0 +1,43 @@
+services:
+  wb-collector:
+    build: .
+    container_name: wb-collector
+    restart: unless-stopped
+    env_file:
+      - .staff/env
+    environment:
+      WORK_DIR: /app/work_dir
+      GOOGLE_CREDENTIALS_PATH: /app/.staff/gdrive_token.json
+    volumes:
+      - ./.staff:/app/.staff
+      - ./work_dir:/app/work_dir
+    command: ["uv", "run", "--no-sync", "--package", "wb-mcp-client", "wb-collector"]
+
+  wb-mcp-server:
+    build: .
+    container_name: wb-mcp-server
+    restart: unless-stopped
+    env_file:
+      - .staff/env
+    environment:
+      WORK_DIR: /app/work_dir
+      MCP_DOMAIN: market-squid-mcp.ru
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      GOOGLE_CREDENTIALS_PATH: /app/.staff/gdrive_token.json
+    volumes:
+      - ./.staff:/app/.staff:ro
+      - ./work_dir:/app/work_dir
+    command: ["uv", "run", "--no-sync", "--package", "wb-mcp-server", "wb-mcp-server"]
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: wb-mcp-caddy
+    restart: unless-stopped
+    depends_on:
+      - wb-mcp-server
+    ports:
+      - "443:443"
+    volumes:
+      - ./configs/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./.staff:/app/.staff:ro

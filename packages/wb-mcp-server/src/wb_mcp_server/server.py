@@ -182,5 +182,11 @@ def main():
     uvicorn.run(create_app(), host="127.0.0.1", port=8000)
 
 
-if __name__ == "__main__":
-    main()
+#if __name__ == "__main__":
+#    main()
+
+
+def main():
+    host = os.getenv("MCP_HOST", "0.0.0.0")
+    port = int(os.getenv("MCP_PORT", "8000"))
+    uvicorn.run(create_app(), host=host, port=port)
