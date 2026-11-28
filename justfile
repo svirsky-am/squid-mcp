@@ -30,3 +30,6 @@ test-real-connection:
 check-open-8000-port:
     lsof -i :8000
 #ss -tlnp | grep :8000
+
+test-check-stoks:
+    uv run --package wb-mcp-client wb-sync-stocks

@@ -464,7 +464,71 @@ def _build_sheet_registry(wb: Workbook, records: List[Dict[str, Any]]) -> None:
     ws.auto_filter.ref = f"A1:{get_column_letter(len(raw_headers))}{max(len(records) + 1, 1)}"
     _auto_fit_columns(ws)
 
+def _build_sheet_stocks(wb: Workbook, stock_records: List[Dict[str, Any]]) -> None:
+    ws = wb.create_sheet(title="Остатки FBS")
+    headers = [
+        "Склад продавца",
+        "ID склада",
+        "Артикул продавца",
+        "Артикул WB (nmId)",
+        "Наименование",
+        "Бренд",
+        "Предмет",
+        "Баркод (SKU)",
+        "Остаток, шт.",
+        "Продаж за 14 дн., шт.",
+        "Темп продаж, шт./день",
+        "Хватит на, дн.",
+        "Дата обновления",
+    ]
+    ws.append(headers)
+    for c_i in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=c_i)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center")
 
+    for r_idx, item in enumerate(stock_records, start=2):
+        # Формула темпа продаж = Продаж за 14 дн. / 14
+        velocity_formula = f"=J{r_idx}/14"
+        # Формула прогноза дней = Остаток / Темп (если темп > 0)
+        days_left_formula = f'=IF(K{r_idx}>0, ROUND(I{r_idx}/K{r_idx}, 1), "-")'
+
+        ws.append([
+            item["warehouse_name"],
+            item["warehouse_id"],
+            item["article"],
+            item["nm_id"],
+            item["title"],
+            item["brand"],
+            item["subject"],
+            item["sku"],
+            item["amount"],
+            item["sold_14d"],
+            velocity_formula,
+            days_left_formula,
+            item["updated_at"],
+        ])
+        ws.cell(row=r_idx, column=9).number_format = "#,##0"
+        ws.cell(row=r_idx, column=10).number_format = "#,##0"
+        ws.cell(row=r_idx, column=11).number_format = "#,##0.00"
+
+    if stock_records:
+        tot_row = len(stock_records) + 2
+        ws.cell(row=tot_row, column=1, value="Общий итог").font = TOTAL_FONT
+        for c_i in range(1, len(headers) + 1):
+            ws.cell(row=tot_row, column=c_i).fill = TOTAL_FILL
+
+        c_tot_stock = ws.cell(row=tot_row, column=9, value=f"=SUM(I2:I{tot_row - 1})")
+        c_tot_sold = ws.cell(row=tot_row, column=10, value=f"=SUM(J2:J{tot_row - 1})")
+        c_tot_stock.font = TOTAL_FONT
+        c_tot_sold.font = TOTAL_FONT
+        c_tot_stock.number_format = "#,##0"
+        c_tot_sold.number_format = "#,##0"
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(len(stock_records) + 1, 1)}"
+    _auto_fit_columns(ws)
 
 def build_excel_report_general(
     config: AppConfig,
@@ -486,6 +550,37 @@ def build_excel_report_general(
             FROM fbs_orders o
             LEFT JOIN product_cards c ON o.nm_id = c.nm_id
             ORDER BY o.created_at DESC
+            """
+        ).fetchall()
+        
+        stock_rows = conn.execute(
+            """
+            WITH sales_14d AS (
+                SELECT sku, COUNT(*) AS cnt
+                FROM fbs_orders
+                WHERE created_at >= datetime('now', '-14 days')
+                  AND COALESCE(supplier_status, '') != 'cancel'
+                  AND COALESCE(wb_status, '') NOT IN ('canceled', 'canceled_by_client', 'declined_by_client')
+                  AND sku IS NOT NULL AND sku != ''
+                GROUP BY sku
+            )
+            SELECT
+                s.warehouse_id,
+                COALESCE(w.name, 'Склад #' || s.warehouse_id) AS warehouse_name,
+                s.sku,
+                s.amount,
+                s.updated_at,
+                c.nm_id,
+                c.vendor_code,
+                c.title,
+                c.brand,
+                c.subject_name,
+                COALESCE(sl.cnt, 0) AS sold_14d
+            FROM fbs_stocks s
+            LEFT JOIN warehouses w ON s.warehouse_id = w.id
+            LEFT JOIN product_cards c ON c.skus_json LIKE '%' || s.sku || '%'
+            LEFT JOIN sales_14d sl ON s.sku = sl.sku
+            ORDER BY s.amount DESC, c.vendor_code ASC
             """
         ).fetchall()
 
@@ -523,12 +618,29 @@ def build_excel_report_general(
             "rid": r["rid"] or "",
         })
 
+    stock_records: List[Dict[str, Any]] = [
+        {
+            "warehouse_name": sr["warehouse_name"] or "",
+            "warehouse_id": sr["warehouse_id"],
+            "article": sr["vendor_code"] or "Без артикула",
+            "nm_id": sr["nm_id"] or "",
+            "title": sr["title"] or "",
+            "brand": sr["brand"] or "",
+            "subject": sr["subject_name"] or "",
+            "sku": sr["sku"] or "",
+            "amount": int(sr["amount"] or 0),
+            "sold_14d": int(sr["sold_14d"] or 0),
+            "updated_at": sr["updated_at"] or "",
+        }
+        for sr in stock_rows
+    ]
 
     wb = Workbook()
     _build_sheet_raw_json(wb, records)
     _build_sheet_pivot_articles(wb, records)
     _build_sheet_daily(wb, records)
     _build_sheet_registry(wb, records)
+    _build_sheet_stocks(wb, stock_records)
 
     ts = datetime.now().strftime(TIMESTAMP_FMT)
     report_path = config.reports_dir / f"wb_general_report_{ts}.xlsx"

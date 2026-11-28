@@ -22,6 +22,30 @@ class Database:
         with self._write_lock, self.connect() as conn:
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS warehouses (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    office_id INTEGER,
+                    cargo_type INTEGER,
+                    delivery_type INTEGER,
+                    raw_json TEXT,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fbs_stocks (
+                    warehouse_id INTEGER NOT NULL,
+                    sku TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (warehouse_id, sku)
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS fbs_orders (
                     id INTEGER PRIMARY KEY,
                     order_uid TEXT,
@@ -192,6 +216,75 @@ class Database:
                     wb_updated_at = excluded.wb_updated_at,
                     raw_json = excluded.raw_json,
                     synced_at = CURRENT_TIMESTAMP
+                """,
+                rows,
+            )
+            conn.commit()
+        return len(rows)
+
+    def upsert_warehouses(self, warehouses: List[Dict[str, Any]]) -> int:
+        if not warehouses:
+            return 0
+        rows = [
+            (
+                w["id"],
+                w.get("name", ""),
+                w.get("officeId"),
+                w.get("cargoType"),
+                w.get("deliveryType"),
+                json.dumps(w, ensure_ascii=False),
+            )
+            for w in warehouses
+        ]
+        with self._write_lock, self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO warehouses (id, name, office_id, cargo_type, delivery_type, raw_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    office_id = excluded.office_id,
+                    cargo_type = excluded.cargo_type,
+                    delivery_type = excluded.delivery_type,
+                    raw_json = excluded.raw_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                rows,
+            )
+            conn.commit()
+        return len(rows)
+
+    def get_all_known_skus(self) -> List[str]:
+        """Собирает уникальный список всех баркодов из справочника карточек и истории заказов."""
+        skus_set = set()
+        with self.connect() as conn:
+            card_rows = conn.execute("SELECT skus_json FROM product_cards WHERE skus_json IS NOT NULL").fetchall()
+            for r in card_rows:
+                try:
+                    for s in json.loads(r["skus_json"]):
+                        if s:
+                            skus_set.add(str(s))
+                except Exception:
+                    pass
+
+            order_rows = conn.execute("SELECT DISTINCT sku FROM fbs_orders WHERE sku IS NOT NULL AND sku != ''").fetchall()
+            for r in order_rows:
+                skus_set.add(str(r["sku"]))
+
+        return sorted(skus_set)
+
+    def upsert_stocks(self, warehouse_id: int, stocks: List[Dict[str, Any]]) -> int:
+        if not stocks:
+            return 0
+        rows = [(warehouse_id, str(item["sku"]), int(item.get("amount", 0))) for item in stocks]
+        with self._write_lock, self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO fbs_stocks (warehouse_id, sku, amount, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(warehouse_id, sku) DO UPDATE SET
+                    amount = excluded.amount,
+                    updated_at = CURRENT_TIMESTAMP
                 """,
                 rows,
             )

@@ -5,9 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 from wb_mcp_client.app_config import AppConfig
 from wb_mcp_client.db import Database
 from wb_mcp_client.logger import setup_logger
-from wb_mcp_client.report import build_and_upload_report
+from wb_mcp_client.report import build_and_upload_report, build_excel_report_general
 from wb_mcp_client.wb_client import WBApiClient
 from wb_mcp_client.cards import sync_cards_now
+from wb_mcp_client.stocks import sync_stocks_now
 
 
 from pathlib import Path
@@ -71,6 +72,14 @@ class WBCollectorService:
             if self.stop_event.wait(timeout=interval_sec):
                 break
 
+    def _task_fetch_stocks(self) -> None:
+        try:
+            self.logger.info("Старт задачи синхронизации складов и остатков FBS")
+            sync_stocks_now(config=self.config, logger=self.logger, stop_event=self.stop_event)
+        except Exception:
+            self.logger.exception("Ошибка в задаче _task_fetch_stocks")
+
+
     def run(self) -> None:
         self.logger.info("Инициализация службы WB Collector (work_dir=%s)", self.config.work_dir)
 
@@ -98,6 +107,11 @@ class WBCollectorService:
             threading.Thread(
                 target=self._scheduler_loop,
                 args=("cards-fetcher", self.config.cards_interval_sec, self._task_fetch_cards),
+                daemon=True,
+            ),
+            threading.Thread(
+                target=self._scheduler_loop,
+                args=("stocks-fetcher", self.config.stocks_interval_sec, self._task_fetch_stocks),
                 daemon=True,
             ),
         ]

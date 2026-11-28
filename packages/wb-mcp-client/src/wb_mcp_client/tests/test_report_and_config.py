@@ -145,6 +145,14 @@ def test_build_and_upload_report_without_gdrive(
         "Реестр FBS",
     ]
 
+    assert wb.sheetnames == [
+        "Плоский список (JSON)",
+        "Сводная (Артикулы)",
+        "Сводная (По дням)",
+        "Реестр FBS",
+        "Остатки FBS",
+    ]
+
 
 def test_build_and_upload_report_with_authorized_user(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -261,3 +261,44 @@ class WBApiClient:
             time.sleep(0.65)
 
         return all_cards
+
+    def fetch_warehouses(self, stop_event: Optional[threading.Event] = None) -> List[Dict[str, Any]]:
+        """Получает список складов продавца (/api/v3/warehouses)."""
+        url = f"{self.marketplace_base_url}/api/v3/warehouses"
+        data = self.request_with_retry(
+            "GET",
+            url,
+            endpoint_tag="api_v3_warehouses",
+            stop_event=stop_event,
+        )
+        return data if isinstance(data, list) else []
+
+    def fetch_warehouse_stocks(
+        self,
+        warehouse_id: int,
+        skus: List[str],
+        stop_event: Optional[threading.Event] = None,
+    ) -> List[Dict[str, Any]]:
+        """Запрашивает актуальные остатки на складе продавца по списку SKU батчами по 1000 шт."""
+        if not skus:
+            return []
+
+        url = f"{self.marketplace_base_url}/api/v3/stocks/{warehouse_id}"
+        all_stocks: List[Dict[str, Any]] = []
+        chunk_size = 1000
+
+        for idx in range(0, len(skus), chunk_size):
+            batch = skus[idx : idx + chunk_size]
+            data = self.request_with_retry(
+                "POST",
+                url,
+                endpoint_tag=f"api_v3_stocks_{warehouse_id}",
+                stop_event=stop_event,
+                json={"skus": batch},
+            )
+            items = data.get("stocks") or [] if isinstance(data, dict) else []
+            all_stocks.extend(items)
+            if idx + chunk_size < len(skus):
+                time.sleep(0.35)
+
+        return all_stocks

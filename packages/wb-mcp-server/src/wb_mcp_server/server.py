@@ -11,6 +11,8 @@ from starlette.responses import JSONResponse
 
 from wb_mcp_server.gdrive import upload_report_to_gdrive
 from wb_mcp_client.cards import sync_cards_now
+from wb_mcp_client.stocks import sync_stocks_now
+
 
 mcp = MCPServer("wb-alice-server")
 
@@ -218,6 +220,99 @@ def get_product_card_info(query: str) -> str:
         )
     return "\n".join(lines)
 
+@mcp.tool()
+def sync_fbs_stocks() -> str:
+    """Принудительно запрашивает актуальные остатки товаров на складах продавца FBS из WB API."""
+    res = sync_stocks_now()
+    return f"Остатки FBS обновлены. Складов: {res['warehouses']}, записей остатков: {res['stocks_updated']}."
+
+
+@mcp.tool()
+def get_fbs_stocks(query: Optional[str] = None) -> str:
+    """Показывает актуальные остатки на складах продавца FBS (всё или по артикулу/названию/SKU)."""
+    sql = """
+        SELECT
+            s.warehouse_id,
+            COALESCE(w.name, 'Склад #' || s.warehouse_id) AS warehouse_name,
+            s.sku,
+            s.amount,
+            c.vendor_code,
+            c.title
+        FROM fbs_stocks s
+        LEFT JOIN warehouses w ON s.warehouse_id = w.id
+        LEFT JOIN product_cards c ON c.skus_json LIKE '%' || s.sku || '%'
+        WHERE s.amount > 0
+    """
+    params: list = []
+    if query and query.strip():
+        q = f"%{query.strip()}%"
+        sql += " AND (LOWER(c.vendor_code) LIKE LOWER(?) OR LOWER(c.title) LIKE LOWER(?) OR s.sku LIKE ?)"
+        params.extend([q, q, q])
+
+    sql += " ORDER BY s.amount DESC LIMIT 25"
+    rows = _query_db(sql, tuple(params))
+
+    if not rows:
+        return "Актуальных положительных остатков по заданному запросу не найдено."
+
+    lines = ["Актуальные остатки на складах FBS:"]
+    for r in rows:
+        name = r["title"] or r["vendor_code"] or f"SKU {r['sku']}"
+        art = f" (арт. {r['vendor_code']})" if r["vendor_code"] else ""
+        lines.append(f"- {name}{art} [{r['warehouse_name']}]: {r['amount']} шт.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_low_stock_forecast(days_threshold: int = 7, lookback_days: int = 14) -> str:
+    """Рассчитывает, каких товаров хватит меньше чем на N дней при текущем темпе заказов FBS."""
+    rows = _query_db(
+        """
+        WITH stock_totals AS (
+            SELECT sku, SUM(amount) AS total_stock
+            FROM fbs_stocks
+            GROUP BY sku
+        ),
+        sales_velocity AS (
+            SELECT
+                sku,
+                COUNT(*) AS sold_cnt,
+                CAST(COUNT(*) AS REAL) / ? AS daily_rate
+            FROM fbs_orders
+            WHERE created_at >= datetime('now', ?)
+              AND COALESCE(supplier_status, '') != 'cancel'
+              AND COALESCE(wb_status, '') NOT IN ('canceled', 'canceled_by_client', 'declined_by_client')
+              AND sku IS NOT NULL AND sku != ''
+            GROUP BY sku
+        )
+        SELECT
+            v.sku,
+            COALESCE(st.total_stock, 0) AS total_stock,
+            v.sold_cnt,
+            ROUND(v.daily_rate, 2) AS daily_rate,
+            ROUND(COALESCE(st.total_stock, 0) / v.daily_rate, 1) AS days_left,
+            c.vendor_code,
+            c.title
+        FROM sales_velocity v
+        LEFT JOIN stock_totals st ON v.sku = st.sku
+        LEFT JOIN product_cards c ON c.skus_json LIKE '%' || v.sku || '%'
+        WHERE v.daily_rate > 0
+          AND (COALESCE(st.total_stock, 0) / v.daily_rate) <= ?
+        ORDER BY days_left ASC
+        LIMIT 15
+        """,
+        (lookback_days, f"-{lookback_days} days", days_threshold),
+    )
+    if not rows:
+        return f"Товаров с запасом менее {days_threshold} дн. (по темпу продаж за {lookback_days} дн.) не обнаружено."
+
+    lines = [f"Прогноз дефицита (запас ≤ {days_threshold} дн., расчёт по заказам за {lookback_days} дн.):"]
+    for r in rows:
+        name = r["title"] or r["vendor_code"] or f"SKU {r['sku']}"
+        lines.append(
+            f"- {name}: остаток {r['total_stock']} шт. | темп {r['daily_rate']} шт./день → хватит на ~{r['days_left']} дн."
+        )
+    return "\n".join(lines)
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, token: str):
