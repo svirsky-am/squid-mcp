@@ -72,6 +72,36 @@ class Database:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sales_funnel (
+                    nm_id INTEGER NOT NULL,
+                    period_start TEXT NOT NULL,
+                    period_end TEXT NOT NULL,
+                    vendor_code TEXT,
+                    title TEXT,
+                    brand_name TEXT,
+                    subject_name TEXT,
+                    open_count INTEGER DEFAULT 0,
+                    cart_count INTEGER DEFAULT 0,
+                    order_count INTEGER DEFAULT 0,
+                    order_sum REAL DEFAULT 0.0,
+                    buyout_count INTEGER DEFAULT 0,
+                    buyout_sum REAL DEFAULT 0.0,
+                    cancel_count INTEGER DEFAULT 0,
+                    cancel_sum REAL DEFAULT 0.0,
+                    add_to_cart_percent REAL DEFAULT 0.0,
+                    cart_to_order_percent REAL DEFAULT 0.0,
+                    buyout_percent REAL DEFAULT 0.0,
+                    add_to_wishlist INTEGER DEFAULT 0,
+                    raw_json TEXT,
+                    synced_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (nm_id, period_start, period_end)
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sales_funnel_period ON sales_funnel(period_start, period_end);")
+
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fbs_orders_created_at ON fbs_orders(created_at);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fbs_orders_article ON fbs_orders(article);")
             conn.commit()
@@ -285,6 +315,86 @@ class Database:
                 ON CONFLICT(warehouse_id, sku) DO UPDATE SET
                     amount = excluded.amount,
                     updated_at = CURRENT_TIMESTAMP
+                """,
+                rows,
+            )
+            conn.commit()
+        return len(rows)
+
+    def upsert_sales_funnel(
+        self,
+        products: List[Dict[str, Any]],
+        period_start: str,
+        period_end: str,
+    ) -> int:
+        if not products:
+            return 0
+
+        rows = []
+        for item in products:
+            prod = item.get("product") or {}
+            nm_id = prod.get("nmId")
+            if nm_id is None:
+                continue
+
+            stat = (item.get("statistic") or {}).get("selected") or {}
+            conv = stat.get("conversions") or {}
+
+            rows.append(
+                (
+                    int(nm_id),
+                    period_start,
+                    period_end,
+                    prod.get("vendorCode"),
+                    prod.get("title"),
+                    prod.get("brandName"),
+                    prod.get("subjectName"),
+                    int(stat.get("openCount") or 0),
+                    int(stat.get("cartCount") or 0),
+                    int(stat.get("orderCount") or 0),
+                    float(stat.get("orderSum") or 0.0),
+                    int(stat.get("buyoutCount") or 0),
+                    float(stat.get("buyoutSum") or 0.0),
+                    int(stat.get("cancelCount") or 0),
+                    float(stat.get("cancelSum") or 0.0),
+                    float(conv.get("addToCartPercent") or 0.0),
+                    float(conv.get("cartToOrderPercent") or 0.0),
+                    float(conv.get("buyoutPercent") or 0.0),
+                    int(stat.get("addToWishlist") or 0),
+                    json.dumps(item, ensure_ascii=False),
+                )
+            )
+
+        with self._write_lock, self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO sales_funnel (
+                    nm_id, period_start, period_end, vendor_code, title,
+                    brand_name, subject_name, open_count, cart_count,
+                    order_count, order_sum, buyout_count, buyout_sum,
+                    cancel_count, cancel_sum, add_to_cart_percent,
+                    cart_to_order_percent, buyout_percent, add_to_wishlist,
+                    raw_json, synced_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(nm_id, period_start, period_end) DO UPDATE SET
+                    vendor_code = excluded.vendor_code,
+                    title = excluded.title,
+                    brand_name = excluded.brand_name,
+                    subject_name = excluded.subject_name,
+                    open_count = excluded.open_count,
+                    cart_count = excluded.cart_count,
+                    order_count = excluded.order_count,
+                    order_sum = excluded.order_sum,
+                    buyout_count = excluded.buyout_count,
+                    buyout_sum = excluded.buyout_sum,
+                    cancel_count = excluded.cancel_count,
+                    cancel_sum = excluded.cancel_sum,
+                    add_to_cart_percent = excluded.add_to_cart_percent,
+                    cart_to_order_percent = excluded.cart_to_order_percent,
+                    buyout_percent = excluded.buyout_percent,
+                    add_to_wishlist = excluded.add_to_wishlist,
+                    raw_json = excluded.raw_json,
+                    synced_at = CURRENT_TIMESTAMP
                 """,
                 rows,
             )

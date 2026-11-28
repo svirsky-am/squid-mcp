@@ -33,3 +33,6 @@ check-open-8000-port:
 
 test-check-stoks:
     uv run --package wb-mcp-client wb-sync-stocks
+
+test-finance:
+    uv run --package wb-mcp-client wb-sync-funnel --days 7  

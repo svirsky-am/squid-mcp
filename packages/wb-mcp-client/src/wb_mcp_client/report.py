@@ -530,6 +530,96 @@ def _build_sheet_stocks(wb: Workbook, stock_records: List[Dict[str, Any]]) -> No
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(len(stock_records) + 1, 1)}"
     _auto_fit_columns(ws)
 
+def _build_sheet_funnel(wb: Workbook, funnel_records: List[Dict[str, Any]]) -> None:
+    ws = wb.create_sheet(title="Воронка продаж")
+    headers = [
+        "Период с",
+        "Период по",
+        "Артикул продавца",
+        "Артикул WB (nmId)",
+        "Наименование",
+        "Бренд",
+        "Предмет",
+        "Переходы (просмотры), шт.",
+        "В корзину, шт.",
+        "Конверсия в корзину, %",
+        "Заказы, шт.",
+        "Сумма заказов, ₽",
+        "Конверсия из корзины, %",
+        "Выкупы, шт.",
+        "Сумма выкупов, ₽",
+        "Отмены, шт.",
+        "Сумма отмен, ₽",
+        "В избранное, шт.",
+    ]
+    ws.append(headers)
+    for c_i in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=c_i)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for r_idx, f in enumerate(funnel_records, start=2):
+        # Живые формулы конверсий: В корзину / Переходы и Заказы / В корзину
+        conv_cart_formula = f"=IF(H{r_idx}>0, ROUND(I{r_idx}/H{r_idx}*100, 1), 0)"
+        conv_order_formula = f"=IF(I{r_idx}>0, ROUND(K{r_idx}/I{r_idx}*100, 1), 0)"
+
+        ws.append([
+            f["period_start"],
+            f["period_end"],
+            f["article"],
+            f["nm_id"],
+            f["title"],
+            f["brand"],
+            f["subject"],
+            f["open_count"],
+            f["cart_count"],
+            conv_cart_formula,
+            f["order_count"],
+            f["order_sum"],
+            conv_order_formula,
+            f["buyout_count"],
+            f["buyout_sum"],
+            f["cancel_count"],
+            f["cancel_sum"],
+            f["wishlist_count"],
+        ])
+        for col_int in (8, 9, 11, 14, 16, 18):
+            ws.cell(row=r_idx, column=col_int).number_format = "#,##0"
+        for col_pct in (10, 13):
+            ws.cell(row=r_idx, column=col_pct).number_format = "0.0"
+        for col_rub in (12, 15, 17):
+            ws.cell(row=r_idx, column=col_rub).number_format = "#,##0.00"
+
+    if funnel_records:
+        tot_row = len(funnel_records) + 2
+        ws.cell(row=tot_row, column=1, value="Общий итог").font = TOTAL_FONT
+        for c_i in range(1, len(headers) + 1):
+            ws.cell(row=tot_row, column=c_i).fill = TOTAL_FILL
+
+        for col_int in (8, 9, 11, 14, 16, 18):
+            col_let = get_column_letter(col_int)
+            c_tot = ws.cell(row=tot_row, column=col_int, value=f"=SUM({col_let}2:{col_let}{tot_row - 1})")
+            c_tot.font = TOTAL_FONT
+            c_tot.number_format = "#,##0"
+
+        for col_rub in (12, 15, 17):
+            col_let = get_column_letter(col_rub)
+            c_tot = ws.cell(row=tot_row, column=col_rub, value=f"=SUM({col_let}2:{col_let}{tot_row - 1})")
+            c_tot.font = TOTAL_FONT
+            c_tot.number_format = "#,##0.00"
+
+        c_tot_cc = ws.cell(row=tot_row, column=10, value=f"=IF(H{tot_row}>0, ROUND(I{tot_row}/H{tot_row}*100, 1), 0)")
+        c_tot_co = ws.cell(row=tot_row, column=13, value=f"=IF(I{tot_row}>0, ROUND(K{tot_row}/I{tot_row}*100, 1), 0)")
+        c_tot_cc.font = TOTAL_FONT
+        c_tot_co.font = TOTAL_FONT
+        c_tot_cc.number_format = "0.0"
+        c_tot_co.number_format = "0.0"
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(len(funnel_records) + 1, 1)}"
+    _auto_fit_columns(ws)
+
 def build_excel_report_general(
     config: AppConfig,
     seller_name: str = "ИП (WB)",
@@ -635,12 +725,50 @@ def build_excel_report_general(
         for sr in stock_rows
     ]
 
+    funnel_rows = conn.execute(
+            """
+            SELECT *
+            FROM sales_funnel
+            WHERE (period_start, period_end) IN (
+                SELECT period_start, period_end
+                FROM sales_funnel
+                ORDER BY synced_at DESC
+                LIMIT 1
+            )
+            ORDER BY open_count DESC, order_sum DESC
+            """
+        ).fetchall()
+
+    funnel_records: List[Dict[str, Any]] = [
+        {
+            "period_start": fr["period_start"] or "",
+            "period_end": fr["period_end"] or "",
+            "article": fr["vendor_code"] or "Без артикула",
+            "nm_id": fr["nm_id"] or "",
+            "title": fr["title"] or "",
+            "brand": fr["brand_name"] or "",
+            "subject": fr["subject_name"] or "",
+            "open_count": int(fr["open_count"] or 0),
+            "cart_count": int(fr["cart_count"] or 0),
+            "order_count": int(fr["order_count"] or 0),
+            "order_sum": round(float(fr["order_sum"] or 0.0), 2),
+            "buyout_count": int(fr["buyout_count"] or 0),
+            "buyout_sum": round(float(fr["buyout_sum"] or 0.0), 2),
+            "cancel_count": int(fr["cancel_count"] or 0),
+            "cancel_sum": round(float(fr["cancel_sum"] or 0.0), 2),
+            "wishlist_count": int(fr["add_to_wishlist"] or 0),
+        }
+        for fr in funnel_rows
+    ]
+
+
     wb = Workbook()
     _build_sheet_raw_json(wb, records)
     _build_sheet_pivot_articles(wb, records)
     _build_sheet_daily(wb, records)
     _build_sheet_registry(wb, records)
     _build_sheet_stocks(wb, stock_records)
+    _build_sheet_funnel(wb, funnel_records)
 
     ts = datetime.now().strftime(TIMESTAMP_FMT)
     report_path = config.reports_dir / f"wb_general_report_{ts}.xlsx"

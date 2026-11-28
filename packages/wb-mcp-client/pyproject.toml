@@ -22,7 +22,7 @@ wb-collector = "wb_mcp_client.service:main"
 wb-report = "wb_mcp_client.report:main"
 wb-sync-cards = "wb_mcp_client.cards:main"
 wb-sync-stocks = "wb_mcp_client.stocks:main"
-
+wb-sync-funnel = "wb_mcp_client.funnel:main"
 
 [build-system]
 requires = ["uv_build>=0.11.26,<0.12.0"]

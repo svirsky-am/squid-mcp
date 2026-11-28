@@ -21,6 +21,9 @@ class WBApiClient:
     PROD_CONTENT_URL = "https://content-api.wildberries.ru"
     SANDBOX_CONTENT_URL = "https://content-api-sandbox.wildberries.ru"
 
+    ANALYTICS_BASE_URL = "https://" + "seller-analytics-api.wildberries.ru"
+
+
     def __init__(
         self,
         config: AppConfig,
@@ -116,6 +119,7 @@ class WBApiClient:
                 else:
                     time.sleep(delay)
                 continue
+
 
             response.raise_for_status()
             data = response.json() if response.content else {}
@@ -302,3 +306,57 @@ class WBApiClient:
                 time.sleep(0.35)
 
         return all_stocks
+
+    def fetch_sales_funnel(
+        self,
+        period_start: str,
+        period_end: str,
+        stop_event: Optional[threading.Event] = None,
+    ) -> List[Dict[str, Any]]:
+        """Выгружает воронку продаж по карточкам (/api/analytics/v3/sales-funnel/products)."""
+        url = f"{self.ANALYTICS_BASE_URL}/api/analytics/v3/sales-funnel/products"
+        all_products: List[Dict[str, Any]] = []
+        limit = 100
+        offset = 0
+
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+
+            payload = {
+                "selectedPeriod": {
+                    "start": period_start,
+                    "end": period_end,
+                },
+                "limit": limit,
+                "offset": offset,
+            }
+            data = self.request_with_retry(
+                "POST",
+                url,
+                endpoint_tag="analytics_v3_sales_funnel_products",
+                stop_event=stop_event,
+                json=payload,
+            )
+            products = ((data.get("data") or {}).get("products") or []) if isinstance(data, dict) else []
+            all_products.extend(products)
+
+            self.logger.info(
+                "Получено %d карточек воронки (всего: %d, offset=%d)",
+                len(products),
+                len(all_products),
+                offset,
+            )
+
+            if len(products) < limit:
+                break
+
+            offset += limit
+            # Лимит Seller Analytics API: 3 запроса/мин (интервал 20 сек)
+            if stop_event:
+                if stop_event.wait(20.5):
+                    break
+            else:
+                time.sleep(20.5)
+
+        return all_products

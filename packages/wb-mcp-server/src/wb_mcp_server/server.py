@@ -12,7 +12,7 @@ from starlette.responses import JSONResponse
 from wb_mcp_server.gdrive import upload_report_to_gdrive
 from wb_mcp_client.cards import sync_cards_now
 from wb_mcp_client.stocks import sync_stocks_now
-
+from wb_mcp_client.funnel import sync_funnel_now
 
 mcp = MCPServer("wb-alice-server")
 
@@ -312,6 +312,88 @@ def get_low_stock_forecast(days_threshold: int = 7, lookback_days: int = 14) -> 
         lines.append(
             f"- {name}: остаток {r['total_stock']} шт. | темп {r['daily_rate']} шт./день → хватит на ~{r['days_left']} дн."
         )
+    return "\n".join(lines)
+
+@mcp.tool()
+def sync_sales_funnel(days: int = 7) -> str:
+    """Принудительно запрашивает статистику воронки продаж (просмотры, корзина, выкупы) из WB API."""
+    saved = sync_funnel_now(days=days)
+    return f"Воронка продаж за {days} дн. успешно обновлена. Обработано карточек: {saved} шт."
+
+
+@mcp.tool()
+def get_sales_funnel_summary(days: int = 7, limit: int = 5) -> str:
+    """Показывает сводку воронки продаж (переходы в карточку, корзина, заказы, выкупы и конверсии)."""
+    latest_period = _query_db(
+        """
+        SELECT period_start, period_end
+        FROM sales_funnel
+        WHERE CAST(julianday(period_end) - julianday(period_start) AS INTEGER) = ?
+        ORDER BY synced_at DESC
+        LIMIT 1
+        """,
+        (days,),
+    )
+    if not latest_period:
+        latest_period = _query_db(
+            "SELECT period_start, period_end FROM sales_funnel ORDER BY synced_at DESC LIMIT 1"
+        )
+    if not latest_period:
+        return "Данных по воронке продаж в базе нет. Вызовите инструмент sync_sales_funnel."
+
+    p_row = next(iter(latest_period))
+    p_start, p_end = p_row["period_start"], p_row["period_end"]
+
+    totals = _query_db(
+        """
+        SELECT
+            SUM(open_count) AS opens,
+            SUM(cart_count) AS carts,
+            SUM(order_count) AS orders,
+            ROUND(SUM(order_sum), 2) AS order_sum,
+            SUM(buyout_count) AS buyouts,
+            ROUND(SUM(buyout_sum), 2) AS buyout_sum
+        FROM sales_funnel
+        WHERE period_start = ? AND period_end = ?
+        """,
+        (p_start, p_end),
+    )
+    t = next(iter(totals))
+    opens = int(t["opens"] or 0)
+    carts = int(t["carts"] or 0)
+    orders = int(t["orders"] or 0)
+    buyouts = int(t["buyouts"] or 0)
+
+    conv_cart = round((carts / opens * 100), 1) if opens > 0 else 0.0
+    conv_order = round((orders / carts * 100), 1) if carts > 0 else 0.0
+
+    lines = [
+        f"Воронка продаж за период {p_start} — {p_end}:",
+        f"- Переходы в карточки: {opens} шт.",
+        f"- Добавления в корзину: {carts} шт. (конверсия в корзину: {conv_cart}%)",
+        f"- Заказы: {orders} шт. на {t['order_sum'] or 0.0} ₽ (конверсия из корзины: {conv_order}%)",
+        f"- Выкупы: {buyouts} шт. на {t['buyout_sum'] or 0.0} ₽",
+    ]
+
+    top_cards = _query_db(
+        """
+        SELECT nm_id, vendor_code, title, open_count, cart_count, order_count, add_to_cart_percent, cart_to_order_percent
+        FROM sales_funnel
+        WHERE period_start = ? AND period_end = ?
+        ORDER BY open_count DESC
+        LIMIT ?
+        """,
+        (p_start, p_end, limit),
+    )
+    if top_cards:
+        lines.append(f"\nТоп-{limit} карточек по просмотрам:")
+        for idx, c in enumerate(top_cards, start=1):
+            label = f"«{c['title']}» (арт. {c['vendor_code']})" if c["title"] else f"nmId {c['nm_id']}"
+            lines.append(
+                f"{idx}. {label}: {c['open_count']} просм. → {c['cart_count']} корз. ({c['add_to_cart_percent']}%) → "
+                f"{c['order_count']} зак. ({c['cart_to_order_percent']}%)"
+            )
+
     return "\n".join(lines)
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
