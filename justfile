@@ -27,6 +27,9 @@ test-get-cards-list:
 test-real-connection:
     RUN_REAL_WB_TESTS=1 uv run pytest -k test_real_wb_cards_fetch -v
 
+test-real-all:
+    RUN_REAL_WB_TESTS=1 uv run pytest -v
+
 check-open-8000-port:
     lsof -i :8000
 #ss -tlnp | grep :8000

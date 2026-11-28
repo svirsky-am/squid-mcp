@@ -31,7 +31,7 @@ class AppConfig:
     report_interval_minutes: int = field(default_factory=lambda: _env_int("REPORT_INTERVAL_MINUTES", 60))
     stocks_interval_minutes: int = field(default_factory=lambda: _env_int("STOCKS_INTERVAL_MINUTES", 60))
     funnel_interval_minutes: int = field(default_factory=lambda: _env_int("FUNNEL_INTERVAL_MINUTES", 240))
-    tunnel_lookback_days: int = field(default_factory=lambda: _env_int("FUNNEL_LOOKBACK_DAYS", 7))
+    funnel_lookback_days: int = field(default_factory=lambda: _env_int("FUNNEL_LOOKBACK_DAYS", 7))
     lookback_days: int = field(default_factory=lambda: _env_int("LOOKBACK_DAYS", 30))
     max_workers: int = field(default_factory=lambda: _env_int("MAX_WORKERS", 4))
 

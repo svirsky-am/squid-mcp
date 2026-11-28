@@ -4,3 +4,4 @@ uv.lock
 work_dir
 .answers
 packages/wb-mcp-server/tests/__pycache__
+packages/wb-mcp-server/tests/__pycache__
