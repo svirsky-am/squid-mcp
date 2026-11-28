@@ -79,4 +79,4 @@ uv run --package wb-mcp-client wb-report
 uv run --package wb-mcp-server wb-upload-gdrive
 ```
 
-> **Безопасность:** убедитесь, что директория `.staff/` добавлена в `.gitignore`, чтобы ключи `oauth_client.json` и `gdrive_token.json` не попали в репозиторий.
+> **Безопасность:** убедитесь, что директория `.staff/` добавлена в `.gitignore`, чтобы ключи `  не попали в репозиторий.

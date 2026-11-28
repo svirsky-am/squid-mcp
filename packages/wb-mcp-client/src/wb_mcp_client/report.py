@@ -230,17 +230,17 @@ def _build_sheet_pivot_articles(wb: Workbook, records: List[Dict[str, Any]]) -> 
     )
 
     for rec in records:
-        key = (rec["article"], rec["nm_id"])
+        key = (rec["article"], rec["nm_id"], rec["title"], rec["subject"])
         st = rec["status_human"]
         pivot_data[key][st]["cnt"] += 1
         pivot_data[key][st]["sum"] += rec["price_rub"]
 
-    ws.cell(row=1, column=1, value="Артикул продавца")
-    ws.cell(row=1, column=2, value="Артикул WB (nmId)")
-    ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=1)
-    ws.merge_cells(start_row=1, start_column=2, end_row=2, end_column=2)
+    fixed_headers = ["Артикул продавца", "Артикул WB (nmId)", "Наименование", "Предмет"]
+    for idx, h_text in enumerate(fixed_headers, start=1):
+        ws.cell(row=1, column=idx, value=h_text)
+        ws.merge_cells(start_row=1, start_column=idx, end_row=2, end_column=idx)
 
-    col_idx = 3
+    col_idx = len(fixed_headers) + 1
     for st in all_statuses:
         ws.cell(row=1, column=col_idx, value=st)
         ws.merge_cells(start_row=1, start_column=col_idx, end_row=1, end_column=col_idx + 1)
@@ -271,15 +271,17 @@ def _build_sheet_pivot_articles(wb: Workbook, records: List[Dict[str, Any]]) -> 
 
     start_data_row = 3
     curr_row = start_data_row
-    for art, nm_id in sorted_keys:
+    for art, nm_id, title, subject in sorted_keys:
         ws.cell(row=curr_row, column=1, value=art).border = CELL_BORDER
         ws.cell(row=curr_row, column=2, value=nm_id).border = CELL_BORDER
+        ws.cell(row=curr_row, column=3, value=title).border = CELL_BORDER
+        ws.cell(row=curr_row, column=4, value=subject).border = CELL_BORDER
 
         cnt_cells = []
         sum_cells = []
-        c_ptr = 3
+        c_ptr = 5
         for st in all_statuses:
-            vals = pivot_data[(art, nm_id)][st]
+            vals = pivot_data[(art, nm_id, title, subject)][st]
             c_cnt = ws.cell(row=curr_row, column=c_ptr, value=vals["cnt"])
             c_sum = ws.cell(row=curr_row, column=c_ptr + 1, value=round(vals["sum"], 2))
             c_cnt.number_format = "#,##0"
@@ -305,10 +307,10 @@ def _build_sheet_pivot_articles(wb: Workbook, records: List[Dict[str, Any]]) -> 
 
     end_data_row = max(curr_row - 1, start_data_row)
     ws.cell(row=curr_row, column=1, value="Общий итог").font = TOTAL_FONT
-    ws.cell(row=curr_row, column=1).fill = TOTAL_FILL
-    ws.cell(row=curr_row, column=2).fill = TOTAL_FILL
+    for c_i in range(1, 5):
+        ws.cell(row=curr_row, column=c_i).fill = TOTAL_FILL
 
-    for c_i in range(3, total_sum_col + 1):
+    for c_i in range(5, total_sum_col + 1):
         col_let = get_column_letter(c_i)
         cell = ws.cell(
             row=curr_row,
@@ -320,9 +322,8 @@ def _build_sheet_pivot_articles(wb: Workbook, records: List[Dict[str, Any]]) -> 
         cell.border = CELL_BORDER
         cell.number_format = "#,##0" if c_i % 2 == 1 else "#,##0.00"
 
-    ws.freeze_panes = "C3"
+    ws.freeze_panes = "E3"
     _auto_fit_columns(ws)
-
 
 def _build_sheet_daily(wb: Workbook, records: List[Dict[str, Any]]) -> None:
     ws = wb.create_sheet(title="Сводная (По дням)")
@@ -414,6 +415,9 @@ def _build_sheet_registry(wb: Workbook, records: List[Dict[str, Any]]) -> None:
         "Валюта",
         "Артикул Wildberries",
         "Артикул продавца",
+        "Наименование",
+        "Бренд",
+        "Предмет",
         "Баркод (SKU)",
         "ID склада продавца",
         "ID офиса WB",
@@ -442,6 +446,9 @@ def _build_sheet_registry(wb: Workbook, records: List[Dict[str, Any]]) -> None:
             rec["currency"],
             rec["nm_id"],
             rec["article"],
+            rec["title"],
+            rec["brand"],
+            rec["subject"],
             rec["sku"],
             rec["warehouse_id"],
             rec["office_id"],
@@ -457,6 +464,162 @@ def _build_sheet_registry(wb: Workbook, records: List[Dict[str, Any]]) -> None:
     ws.auto_filter.ref = f"A1:{get_column_letter(len(raw_headers))}{max(len(records) + 1, 1)}"
     _auto_fit_columns(ws)
 
+def _build_sheet_stocks(wb: Workbook, stock_records: List[Dict[str, Any]]) -> None:
+    ws = wb.create_sheet(title="Остатки FBS")
+    headers = [
+        "Склад продавца",
+        "ID склада",
+        "Артикул продавца",
+        "Артикул WB (nmId)",
+        "Наименование",
+        "Бренд",
+        "Предмет",
+        "Баркод (SKU)",
+        "Остаток, шт.",
+        "Продаж за 14 дн., шт.",
+        "Темп продаж, шт./день",
+        "Хватит на, дн.",
+        "Дата обновления",
+    ]
+    ws.append(headers)
+    for c_i in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=c_i)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for r_idx, item in enumerate(stock_records, start=2):
+        # Формула темпа продаж = Продаж за 14 дн. / 14
+        velocity_formula = f"=J{r_idx}/14"
+        # Формула прогноза дней = Остаток / Темп (если темп > 0)
+        days_left_formula = f'=IF(K{r_idx}>0, ROUND(I{r_idx}/K{r_idx}, 1), "-")'
+
+        ws.append([
+            item["warehouse_name"],
+            item["warehouse_id"],
+            item["article"],
+            item["nm_id"],
+            item["title"],
+            item["brand"],
+            item["subject"],
+            item["sku"],
+            item["amount"],
+            item["sold_14d"],
+            velocity_formula,
+            days_left_formula,
+            item["updated_at"],
+        ])
+        ws.cell(row=r_idx, column=9).number_format = "#,##0"
+        ws.cell(row=r_idx, column=10).number_format = "#,##0"
+        ws.cell(row=r_idx, column=11).number_format = "#,##0.00"
+
+    if stock_records:
+        tot_row = len(stock_records) + 2
+        ws.cell(row=tot_row, column=1, value="Общий итог").font = TOTAL_FONT
+        for c_i in range(1, len(headers) + 1):
+            ws.cell(row=tot_row, column=c_i).fill = TOTAL_FILL
+
+        c_tot_stock = ws.cell(row=tot_row, column=9, value=f"=SUM(I2:I{tot_row - 1})")
+        c_tot_sold = ws.cell(row=tot_row, column=10, value=f"=SUM(J2:J{tot_row - 1})")
+        c_tot_stock.font = TOTAL_FONT
+        c_tot_sold.font = TOTAL_FONT
+        c_tot_stock.number_format = "#,##0"
+        c_tot_sold.number_format = "#,##0"
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(len(stock_records) + 1, 1)}"
+    _auto_fit_columns(ws)
+
+def _build_sheet_funnel(wb: Workbook, funnel_records: List[Dict[str, Any]]) -> None:
+    ws = wb.create_sheet(title="Воронка продаж")
+    headers = [
+        "Период с",
+        "Период по",
+        "Артикул продавца",
+        "Артикул WB (nmId)",
+        "Наименование",
+        "Бренд",
+        "Предмет",
+        "Переходы (просмотры), шт.",
+        "В корзину, шт.",
+        "Конверсия в корзину, %",
+        "Заказы, шт.",
+        "Сумма заказов, ₽",
+        "Конверсия из корзины, %",
+        "Выкупы, шт.",
+        "Сумма выкупов, ₽",
+        "Отмены, шт.",
+        "Сумма отмен, ₽",
+        "В избранное, шт.",
+    ]
+    ws.append(headers)
+    for c_i in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=c_i)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for r_idx, f in enumerate(funnel_records, start=2):
+        # Живые формулы конверсий: В корзину / Переходы и Заказы / В корзину
+        conv_cart_formula = f"=IF(H{r_idx}>0, ROUND(I{r_idx}/H{r_idx}*100, 1), 0)"
+        conv_order_formula = f"=IF(I{r_idx}>0, ROUND(K{r_idx}/I{r_idx}*100, 1), 0)"
+
+        ws.append([
+            f["period_start"],
+            f["period_end"],
+            f["article"],
+            f["nm_id"],
+            f["title"],
+            f["brand"],
+            f["subject"],
+            f["open_count"],
+            f["cart_count"],
+            conv_cart_formula,
+            f["order_count"],
+            f["order_sum"],
+            conv_order_formula,
+            f["buyout_count"],
+            f["buyout_sum"],
+            f["cancel_count"],
+            f["cancel_sum"],
+            f["wishlist_count"],
+        ])
+        for col_int in (8, 9, 11, 14, 16, 18):
+            ws.cell(row=r_idx, column=col_int).number_format = "#,##0"
+        for col_pct in (10, 13):
+            ws.cell(row=r_idx, column=col_pct).number_format = "0.0"
+        for col_rub in (12, 15, 17):
+            ws.cell(row=r_idx, column=col_rub).number_format = "#,##0.00"
+
+    if funnel_records:
+        tot_row = len(funnel_records) + 2
+        ws.cell(row=tot_row, column=1, value="Общий итог").font = TOTAL_FONT
+        for c_i in range(1, len(headers) + 1):
+            ws.cell(row=tot_row, column=c_i).fill = TOTAL_FILL
+
+        for col_int in (8, 9, 11, 14, 16, 18):
+            col_let = get_column_letter(col_int)
+            c_tot = ws.cell(row=tot_row, column=col_int, value=f"=SUM({col_let}2:{col_let}{tot_row - 1})")
+            c_tot.font = TOTAL_FONT
+            c_tot.number_format = "#,##0"
+
+        for col_rub in (12, 15, 17):
+            col_let = get_column_letter(col_rub)
+            c_tot = ws.cell(row=tot_row, column=col_rub, value=f"=SUM({col_let}2:{col_let}{tot_row - 1})")
+            c_tot.font = TOTAL_FONT
+            c_tot.number_format = "#,##0.00"
+
+        c_tot_cc = ws.cell(row=tot_row, column=10, value=f"=IF(H{tot_row}>0, ROUND(I{tot_row}/H{tot_row}*100, 1), 0)")
+        c_tot_co = ws.cell(row=tot_row, column=13, value=f"=IF(I{tot_row}>0, ROUND(K{tot_row}/I{tot_row}*100, 1), 0)")
+        c_tot_cc.font = TOTAL_FONT
+        c_tot_co.font = TOTAL_FONT
+        c_tot_cc.number_format = "0.0"
+        c_tot_co.number_format = "0.0"
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{max(len(funnel_records) + 1, 1)}"
+    _auto_fit_columns(ws)
+
 def build_excel_report_general(
     config: AppConfig,
     seller_name: str = "ИП (WB)",
@@ -468,7 +631,47 @@ def build_excel_report_general(
 
     with db.connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM fbs_orders ORDER BY created_at DESC"
+            """
+            SELECT
+                o.*,
+                c.title AS card_title,
+                c.brand AS card_brand,
+                c.subject_name AS card_subject
+            FROM fbs_orders o
+            LEFT JOIN product_cards c ON o.nm_id = c.nm_id
+            ORDER BY o.created_at DESC
+            """
+        ).fetchall()
+        
+        stock_rows = conn.execute(
+            """
+            WITH sales_14d AS (
+                SELECT sku, COUNT(*) AS cnt
+                FROM fbs_orders
+                WHERE created_at >= datetime('now', '-14 days')
+                  AND COALESCE(supplier_status, '') != 'cancel'
+                  AND COALESCE(wb_status, '') NOT IN ('canceled', 'canceled_by_client', 'declined_by_client')
+                  AND sku IS NOT NULL AND sku != ''
+                GROUP BY sku
+            )
+            SELECT
+                s.warehouse_id,
+                COALESCE(w.name, 'Склад #' || s.warehouse_id) AS warehouse_name,
+                s.sku,
+                s.amount,
+                s.updated_at,
+                c.nm_id,
+                c.vendor_code,
+                c.title,
+                c.brand,
+                c.subject_name,
+                COALESCE(sl.cnt, 0) AS sold_14d
+            FROM fbs_stocks s
+            LEFT JOIN warehouses w ON s.warehouse_id = w.id
+            LEFT JOIN product_cards c ON c.skus_json LIKE '%' || s.sku || '%'
+            LEFT JOIN sales_14d sl ON s.sku = sl.sku
+            ORDER BY s.amount DESC, c.vendor_code ASC
+            """
         ).fetchall()
 
     records: List[Dict[str, Any]] = []
@@ -483,7 +686,7 @@ def build_excel_report_general(
         records.append({
             "raw": raw,
             "report_date": report_date_str,
-            "seller": seller_name,
+            "seller": str(seller_name),
             "order_id": r["id"],
             "supply_id": r["supply_id"] or "-",
             "created_at": created_iso,
@@ -492,6 +695,9 @@ def build_excel_report_general(
             "currency": "₽",
             "nm_id": r["nm_id"] or "",
             "article": r["article"] or "Без артикула",
+            "title": r["card_title"] or "",
+            "brand": r["card_brand"] or "",
+            "subject": r["card_subject"] or "",
             "sku": r["sku"] or "",
             "warehouse_id": r["warehouse_id"] or "",
             "office_id": r["office_id"] or "",
@@ -502,11 +708,67 @@ def build_excel_report_general(
             "rid": r["rid"] or "",
         })
 
+    stock_records: List[Dict[str, Any]] = [
+        {
+            "warehouse_name": sr["warehouse_name"] or "",
+            "warehouse_id": sr["warehouse_id"],
+            "article": sr["vendor_code"] or "Без артикула",
+            "nm_id": sr["nm_id"] or "",
+            "title": sr["title"] or "",
+            "brand": sr["brand"] or "",
+            "subject": sr["subject_name"] or "",
+            "sku": sr["sku"] or "",
+            "amount": int(sr["amount"] or 0),
+            "sold_14d": int(sr["sold_14d"] or 0),
+            "updated_at": sr["updated_at"] or "",
+        }
+        for sr in stock_rows
+    ]
+
+    funnel_rows = conn.execute(
+            """
+            SELECT *
+            FROM sales_funnel
+            WHERE (period_start, period_end) IN (
+                SELECT period_start, period_end
+                FROM sales_funnel
+                ORDER BY synced_at DESC
+                LIMIT 1
+            )
+            ORDER BY open_count DESC, order_sum DESC
+            """
+        ).fetchall()
+
+    funnel_records: List[Dict[str, Any]] = [
+        {
+            "period_start": fr["period_start"] or "",
+            "period_end": fr["period_end"] or "",
+            "article": fr["vendor_code"] or "Без артикула",
+            "nm_id": fr["nm_id"] or "",
+            "title": fr["title"] or "",
+            "brand": fr["brand_name"] or "",
+            "subject": fr["subject_name"] or "",
+            "open_count": int(fr["open_count"] or 0),
+            "cart_count": int(fr["cart_count"] or 0),
+            "order_count": int(fr["order_count"] or 0),
+            "order_sum": round(float(fr["order_sum"] or 0.0), 2),
+            "buyout_count": int(fr["buyout_count"] or 0),
+            "buyout_sum": round(float(fr["buyout_sum"] or 0.0), 2),
+            "cancel_count": int(fr["cancel_count"] or 0),
+            "cancel_sum": round(float(fr["cancel_sum"] or 0.0), 2),
+            "wishlist_count": int(fr["add_to_wishlist"] or 0),
+        }
+        for fr in funnel_rows
+    ]
+
+
     wb = Workbook()
     _build_sheet_raw_json(wb, records)
     _build_sheet_pivot_articles(wb, records)
     _build_sheet_daily(wb, records)
     _build_sheet_registry(wb, records)
+    _build_sheet_stocks(wb, stock_records)
+    _build_sheet_funnel(wb, funnel_records)
 
     ts = datetime.now().strftime(TIMESTAMP_FMT)
     report_path = config.reports_dir / f"wb_general_report_{ts}.xlsx"
