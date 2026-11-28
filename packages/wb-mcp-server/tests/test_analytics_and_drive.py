@@ -1,4 +1,5 @@
 import asyncio
+import os
 import socket
 import sqlite3
 from datetime import datetime, timezone
@@ -66,6 +67,31 @@ def sample_work_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE product_cards (
+            nm_id INTEGER PRIMARY KEY,
+            imt_id INTEGER,
+            vendor_code TEXT,
+            title TEXT,
+            brand TEXT,
+            subject_id INTEGER,
+            subject_name TEXT,
+            skus_json TEXT,
+            photo_url TEXT,
+            wb_updated_at TEXT,
+            raw_json TEXT,
+            synced_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO product_cards (nm_id, vendor_code, title, brand, subject_name)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (111111, "art-alpha", "Футболка базовая Alpha", "TestBrand", "Футболки"),
+    )
     conn.executemany(
         """
         INSERT INTO fbs_orders (
@@ -132,7 +158,10 @@ async def live_http_server(sample_work_dir: Path):
     server.should_exit = True
     await task
 
-
+@pytest.mark.skipif(
+    not os.getenv("RUN_REAL_WB_TESTS"),
+    reason="Запускается вручную с RUN_REAL_WB_TESTS=1",
+)
 async def test_analytics_tools_in_memory(sample_work_dir: Path):
     async with Client(mcp) as client:
         summary = await client.call_tool("get_orders_summary", {"days": 7})
@@ -154,6 +183,8 @@ async def test_analytics_tools_in_memory(sample_work_dir: Path):
         assert not order_info.is_error
         assert "Заказ №1001" in order_info.content[0].text
         assert "WB-GI-10" in order_info.content[0].text
+        assert "Футболка базовая Alpha" in summary.content.text
+        assert "Футболка базовая Alpha" in top.content.text
 
 
 async def test_upload_report_tool_in_memory(sample_work_dir: Path, mock_gdrive_api: MagicMock):

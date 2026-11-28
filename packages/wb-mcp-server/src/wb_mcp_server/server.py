@@ -10,6 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from wb_mcp_server.gdrive import upload_report_to_gdrive
+from wb_mcp_client.cards import sync_cards_now
 
 mcp = MCPServer("wb-alice-server")
 
@@ -36,7 +37,7 @@ def _query_db(sql: str, params: tuple = ()) -> list[sqlite3.Row]:
 
 @mcp.tool()
 def get_orders_summary(days: int = 7) -> str:
-    """Возвращает сводку по заказам FBS и выручке за последние N дней."""
+    """Возвращает сводку по заказам FBS, выручке и лидерам товаров за последние N дней."""
     rows = _query_db(
         """
         SELECT
@@ -62,24 +63,53 @@ def get_orders_summary(days: int = 7) -> str:
         total_cnt += r["cnt"]
         total_sum += r["total_rub"]
     lines.append(f"Итого: {total_cnt} шт. на сумму {round(total_sum, 2)} ₽.")
+
+    top_rows = _query_db(
+        """
+        SELECT
+            COALESCE(o.article, 'без артикула') AS article,
+            c.title AS title,
+            COUNT(*) AS cnt,
+            ROUND(SUM(COALESCE(o.converted_price, o.price, 0)) / 100.0, 2) AS total_rub
+        FROM fbs_orders o
+        LEFT JOIN product_cards c ON o.nm_id = c.nm_id
+        WHERE o.created_at >= datetime('now', ?)
+          AND COALESCE(o.supplier_status, '') != 'cancel'
+          AND COALESCE(o.wb_status, '') NOT IN ('canceled', 'canceled_by_client', 'declined_by_client')
+        GROUP BY o.article, c.title
+        ORDER BY total_rub DESC
+        LIMIT 3
+        """,
+        (f"-{days} days",),
+    )
+    if top_rows:
+        lines.append("\nТоп-3 товара за период:")
+        for idx, tr in enumerate(top_rows, start=1):
+            label = f"{tr['title']} ({tr['article']})" if tr["title"] else tr["article"]
+            lines.append(f"{idx}. {label} — {tr['cnt']} шт., {tr['total_rub']} ₽")
+
     return "\n".join(lines)
 
 
 @mcp.tool()
 def get_top_articles(days: int = 30, limit: int = 5) -> str:
-    """Возвращает топ артикулов продавца по выручке без учёта отменённых заказов."""
+    """Возвращает топ товаров и артикулов продавца по выручке с названиями из справочника карточек."""
     rows = _query_db(
         """
         SELECT
-            COALESCE(article, 'без артикула') AS article,
-            nm_id,
+            COALESCE(o.article, 'без артикула') AS article,
+            o.nm_id AS nm_id,
+            c.title AS title,
+            c.brand AS brand,
+            c.subject_name AS subject_name,
             COUNT(*) AS cnt,
-            ROUND(SUM(COALESCE(converted_price, price, 0)) / 100.0, 2) AS total_rub
-        FROM fbs_orders
-        WHERE created_at >= datetime('now', ?)
-          AND COALESCE(supplier_status, '') != 'cancel'
-          AND COALESCE(wb_status, '') NOT IN ('canceled', 'canceled_by_client', 'declined_by_client')
-        GROUP BY article, nm_id
+            ROUND(SUM(COALESCE(o.converted_price, o.price, 0)) / 100.0, 2) AS total_rub
+        FROM fbs_orders o
+        LEFT JOIN product_cards c ON o.nm_id = c.nm_id
+        WHERE o.created_at >= datetime('now', ?)
+          AND COALESCE(o.supplier_status, '') != 'cancel'
+          AND COALESCE(o.wb_status, '') NOT IN ('canceled', 'canceled_by_client', 'declined_by_client')
+        GROUP BY o.article, o.nm_id, c.title, c.brand, c.subject_name
         ORDER BY total_rub DESC
         LIMIT ?
         """,
@@ -88,9 +118,14 @@ def get_top_articles(days: int = 30, limit: int = 5) -> str:
     if not rows:
         return f"Нет активных заказов за последние {days} дн."
 
-    lines = [f"Топ-{limit} артикулов по выручке за {days} дн.:"]
+    lines = [f"Топ-{limit} товаров по выручке за {days} дн.:"]
     for idx, r in enumerate(rows, start=1):
-        lines.append(f"{idx}. {r['article']} (nmId: {r['nm_id']}) — {r['cnt']} шт., {r['total_rub']} ₽")
+        title_part = f"«{r['title']}» " if r["title"] else ""
+        cat_part = f" [{r['subject_name']}]" if r["subject_name"] else ""
+        lines.append(
+            f"{idx}. {title_part}(арт. {r['article']}, nmId: {r['nm_id']}){cat_part} — "
+            f"{r['cnt']} шт., {r['total_rub']} ₽"
+        )
     return "\n".join(lines)
 
 
@@ -150,6 +185,38 @@ def upload_latest_report_to_drive(filename: Optional[str] = None) -> str:
     uploaded = upload_report_to_gdrive(file_path=target, reports_dir=reports_dir)
     link = uploaded.get("webViewLink", "ссылка недоступна")
     return f"Отчёт '{uploaded.get('name')}' загружен на Google Диск. Ссылка: {link}"
+
+@mcp.tool()
+def sync_product_cards() -> str:
+    """Принудительно запрашивает актуальный список карточек товаров из Content API WB и обновляет базу данных."""
+    count = sync_cards_now()
+    return f"Справочник карточек товаров успешно обновлён. Загружено и сохранено карточек: {count} шт."
+
+
+@mcp.tool()
+def get_product_card_info(query: str) -> str:
+    """Ищет карточку товара в локальной базе по артикулу продавца, названию или nmID."""
+    rows = _query_db(
+        """
+        SELECT nm_id, vendor_code, title, brand, subject_name, wb_updated_at
+        FROM product_cards
+        WHERE CAST(nm_id AS TEXT) = ?
+           OR LOWER(vendor_code) LIKE LOWER(?)
+           OR LOWER(title) LIKE LOWER(?)
+        LIMIT 10
+        """,
+        (query.strip(), f"%{query.strip()}%", f"%{query.strip()}%"),
+    )
+    if not rows:
+        return f"Карточки по запросу '{query}' не найдены. Попробуйте обновить справочник командой sync_product_cards."
+
+    lines = [f"Найденные карточки ({len(rows)}):"]
+    for r in rows:
+        lines.append(
+            f"- {r['title']} | Артикул: {r['vendor_code']} | nmID: {r['nm_id']} | "
+            f"Бренд: {r['brand']} ({r['subject_name']})"
+        )
+    return "\n".join(lines)
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):

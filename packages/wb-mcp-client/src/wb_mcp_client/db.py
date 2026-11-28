@@ -51,6 +51,26 @@ class Database:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fbs_orders_created_at ON fbs_orders(created_at);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fbs_orders_article ON fbs_orders(article);")
             conn.commit()
+            # Внутри _init_schema(self):
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS product_cards (
+                    nm_id INTEGER PRIMARY KEY,
+                    imt_id INTEGER,
+                    vendor_code TEXT,
+                    title TEXT,
+                    brand TEXT,
+                    subject_id INTEGER,
+                    subject_name TEXT,
+                    skus_json TEXT,
+                    photo_url TEXT,
+                    wb_updated_at TEXT,
+                    raw_json TEXT,
+                    synced_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_product_cards_vendor_code ON product_cards(vendor_code);")
 
     def upsert_orders(self, orders: List[Dict[str, Any]]) -> int:
         if not orders:
@@ -115,6 +135,63 @@ class Database:
                 UPDATE fbs_orders
                 SET supplier_status = ?, wb_status = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
+                """,
+                rows,
+            )
+            conn.commit()
+        return len(rows)
+
+    def upsert_cards(self, cards: List[Dict[str, Any]]) -> int:
+        if not cards:
+            return 0
+
+        rows = []
+        for c in cards:
+            skus: List[str] = []
+            for size in c.get("sizes") or []:
+                skus.extend(size.get("skus") or [])
+
+
+            photos = c.get("photos") or []
+            first_photo = next(iter(photos), {})
+            photo_url = first_photo.get("big") or first_photo.get("c246x328") or ""
+
+            rows.append(
+                (
+                    c["nmID"],
+                    c.get("imtID"),
+                    c.get("vendorCode"),
+                    c.get("title"),
+                    c.get("brand"),
+                    c.get("subjectID"),
+                    c.get("subjectName"),
+                    json.dumps(skus, ensure_ascii=False),
+                    photo_url,
+                    c.get("updatedAt"),
+                    json.dumps(c, ensure_ascii=False),
+                )
+            )
+
+        with self._write_lock, self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO product_cards (
+                    nm_id, imt_id, vendor_code, title, brand,
+                    subject_id, subject_name, skus_json, photo_url,
+                    wb_updated_at, raw_json, synced_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(nm_id) DO UPDATE SET
+                    imt_id = excluded.imt_id,
+                    vendor_code = excluded.vendor_code,
+                    title = excluded.title,
+                    brand = excluded.brand,
+                    subject_id = excluded.subject_id,
+                    subject_name = excluded.subject_name,
+                    skus_json = excluded.skus_json,
+                    photo_url = excluded.photo_url,
+                    wb_updated_at = excluded.wb_updated_at,
+                    raw_json = excluded.raw_json,
+                    synced_at = CURRENT_TIMESTAMP
                 """,
                 rows,
             )

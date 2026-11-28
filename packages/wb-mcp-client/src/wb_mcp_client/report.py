@@ -230,17 +230,17 @@ def _build_sheet_pivot_articles(wb: Workbook, records: List[Dict[str, Any]]) -> 
     )
 
     for rec in records:
-        key = (rec["article"], rec["nm_id"])
+        key = (rec["article"], rec["nm_id"], rec["title"], rec["subject"])
         st = rec["status_human"]
         pivot_data[key][st]["cnt"] += 1
         pivot_data[key][st]["sum"] += rec["price_rub"]
 
-    ws.cell(row=1, column=1, value="Артикул продавца")
-    ws.cell(row=1, column=2, value="Артикул WB (nmId)")
-    ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=1)
-    ws.merge_cells(start_row=1, start_column=2, end_row=2, end_column=2)
+    fixed_headers = ["Артикул продавца", "Артикул WB (nmId)", "Наименование", "Предмет"]
+    for idx, h_text in enumerate(fixed_headers, start=1):
+        ws.cell(row=1, column=idx, value=h_text)
+        ws.merge_cells(start_row=1, start_column=idx, end_row=2, end_column=idx)
 
-    col_idx = 3
+    col_idx = len(fixed_headers) + 1
     for st in all_statuses:
         ws.cell(row=1, column=col_idx, value=st)
         ws.merge_cells(start_row=1, start_column=col_idx, end_row=1, end_column=col_idx + 1)
@@ -271,15 +271,17 @@ def _build_sheet_pivot_articles(wb: Workbook, records: List[Dict[str, Any]]) -> 
 
     start_data_row = 3
     curr_row = start_data_row
-    for art, nm_id in sorted_keys:
+    for art, nm_id, title, subject in sorted_keys:
         ws.cell(row=curr_row, column=1, value=art).border = CELL_BORDER
         ws.cell(row=curr_row, column=2, value=nm_id).border = CELL_BORDER
+        ws.cell(row=curr_row, column=3, value=title).border = CELL_BORDER
+        ws.cell(row=curr_row, column=4, value=subject).border = CELL_BORDER
 
         cnt_cells = []
         sum_cells = []
-        c_ptr = 3
+        c_ptr = 5
         for st in all_statuses:
-            vals = pivot_data[(art, nm_id)][st]
+            vals = pivot_data[(art, nm_id, title, subject)][st]
             c_cnt = ws.cell(row=curr_row, column=c_ptr, value=vals["cnt"])
             c_sum = ws.cell(row=curr_row, column=c_ptr + 1, value=round(vals["sum"], 2))
             c_cnt.number_format = "#,##0"
@@ -305,10 +307,10 @@ def _build_sheet_pivot_articles(wb: Workbook, records: List[Dict[str, Any]]) -> 
 
     end_data_row = max(curr_row - 1, start_data_row)
     ws.cell(row=curr_row, column=1, value="Общий итог").font = TOTAL_FONT
-    ws.cell(row=curr_row, column=1).fill = TOTAL_FILL
-    ws.cell(row=curr_row, column=2).fill = TOTAL_FILL
+    for c_i in range(1, 5):
+        ws.cell(row=curr_row, column=c_i).fill = TOTAL_FILL
 
-    for c_i in range(3, total_sum_col + 1):
+    for c_i in range(5, total_sum_col + 1):
         col_let = get_column_letter(c_i)
         cell = ws.cell(
             row=curr_row,
@@ -320,9 +322,8 @@ def _build_sheet_pivot_articles(wb: Workbook, records: List[Dict[str, Any]]) -> 
         cell.border = CELL_BORDER
         cell.number_format = "#,##0" if c_i % 2 == 1 else "#,##0.00"
 
-    ws.freeze_panes = "C3"
+    ws.freeze_panes = "E3"
     _auto_fit_columns(ws)
-
 
 def _build_sheet_daily(wb: Workbook, records: List[Dict[str, Any]]) -> None:
     ws = wb.create_sheet(title="Сводная (По дням)")
@@ -414,6 +415,9 @@ def _build_sheet_registry(wb: Workbook, records: List[Dict[str, Any]]) -> None:
         "Валюта",
         "Артикул Wildberries",
         "Артикул продавца",
+        "Наименование",
+        "Бренд",
+        "Предмет",
         "Баркод (SKU)",
         "ID склада продавца",
         "ID офиса WB",
@@ -442,6 +446,9 @@ def _build_sheet_registry(wb: Workbook, records: List[Dict[str, Any]]) -> None:
             rec["currency"],
             rec["nm_id"],
             rec["article"],
+            rec["title"],
+            rec["brand"],
+            rec["subject"],
             rec["sku"],
             rec["warehouse_id"],
             rec["office_id"],
@@ -457,6 +464,8 @@ def _build_sheet_registry(wb: Workbook, records: List[Dict[str, Any]]) -> None:
     ws.auto_filter.ref = f"A1:{get_column_letter(len(raw_headers))}{max(len(records) + 1, 1)}"
     _auto_fit_columns(ws)
 
+
+
 def build_excel_report_general(
     config: AppConfig,
     seller_name: str = "ИП (WB)",
@@ -468,7 +477,16 @@ def build_excel_report_general(
 
     with db.connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM fbs_orders ORDER BY created_at DESC"
+            """
+            SELECT
+                o.*,
+                c.title AS card_title,
+                c.brand AS card_brand,
+                c.subject_name AS card_subject
+            FROM fbs_orders o
+            LEFT JOIN product_cards c ON o.nm_id = c.nm_id
+            ORDER BY o.created_at DESC
+            """
         ).fetchall()
 
     records: List[Dict[str, Any]] = []
@@ -483,7 +501,7 @@ def build_excel_report_general(
         records.append({
             "raw": raw,
             "report_date": report_date_str,
-            "seller": seller_name,
+            "seller": str(seller_name),
             "order_id": r["id"],
             "supply_id": r["supply_id"] or "-",
             "created_at": created_iso,
@@ -492,6 +510,9 @@ def build_excel_report_general(
             "currency": "₽",
             "nm_id": r["nm_id"] or "",
             "article": r["article"] or "Без артикула",
+            "title": r["card_title"] or "",
+            "brand": r["card_brand"] or "",
+            "subject": r["card_subject"] or "",
             "sku": r["sku"] or "",
             "warehouse_id": r["warehouse_id"] or "",
             "office_id": r["office_id"] or "",
@@ -501,6 +522,7 @@ def build_excel_report_general(
             "is_b2b": is_b2b,
             "rid": r["rid"] or "",
         })
+
 
     wb = Workbook()
     _build_sheet_raw_json(wb, records)

@@ -27,7 +27,7 @@ class AppConfig:
     work_dir: Path = field(default_factory=lambda: Path(os.getenv("WORK_DIR", "work_dir")).resolve())
     fetch_data: bool = field(default_factory=lambda: _env_bool("FETCH_DATA", True))
     fetch_orders_interval_minutes: int = field(default_factory=lambda: _env_int("FETCH_INTERVAL_MINUTES", 30))
-    cards_interval_minutes: int = field(default_factory=lambda: _env_int("CARDS_INTERVAL_MINUTES", 60))
+    cards_interval_minutes: int = field(default_factory=lambda: _env_int("CARDS_INTERVAL_MINUTES", 360))
     report_interval_minutes: int = field(default_factory=lambda: _env_int("REPORT_INTERVAL_MINUTES", 60))
     lookback_days: int = field(default_factory=lambda: _env_int("LOOKBACK_DAYS", 30))
     max_workers: int = field(default_factory=lambda: _env_int("MAX_WORKERS", 4))

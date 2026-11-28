@@ -15,17 +15,54 @@ class WBApiClient:
         "https://content-api.wildberries.ru/ping",
         "https://marketplace-api.wildberries.ru/ping",
     ]
-    MARKETPLACE_BASE_URL = "https://marketplace-api.wildberries.ru"
+    PROD_MARKETPLACE_URL = "https://marketplace-api.wildberries.ru"
+    SANDBOX_MARKETPLACE_URL = "https://marketplace-api-sandbox.wildberries.ru"
 
-    def __init__(self, config: AppConfig, logger: logging.Logger) -> None:
+    PROD_CONTENT_URL = "https://content-api.wildberries.ru"
+    SANDBOX_CONTENT_URL = "https://content-api-sandbox.wildberries.ru"
+
+    def __init__(
+        self,
+        config: AppConfig,
+        logger: logging.Logger,
+        use_sandbox: bool = False,
+    ) -> None:
         self.config = config
         self.logger = logger
+        self.use_sandbox = use_sandbox
+
+        token = self.config.sandbox_token if use_sandbox else self.config.api_token
+        self.marketplace_base_url = (
+            self.SANDBOX_MARKETPLACE_URL if use_sandbox else self.PROD_MARKETPLACE_URL
+        )
+        self.content_base_url = (
+            self.SANDBOX_CONTENT_URL if use_sandbox else self.PROD_CONTENT_URL
+        )
+
         self._client = httpx.Client(
             headers={
-                "Authorization": self.config.api_token,
+                "Authorization": token,
                 "Content-Type": "application/json",
             },
             timeout=httpx.Timeout(30.0),
+        )
+
+    def upload_sandbox_cards(
+        self,
+        cards_payload: List[Dict[str, Any]],
+        stop_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
+        """Создаёт тестовые карточки в песочнице (/content/v2/cards/upload)."""
+        if not self.use_sandbox:
+            raise ValueError("Метод upload_sandbox_cards разрешён только при use_sandbox=True")
+
+        url = f"{self.content_base_url}/content/v2/cards/upload"
+        return self.request_with_retry(
+            "POST",
+            url,
+            endpoint_tag="content_v2_cards_upload",
+            stop_event=stop_event,
+            json=cards_payload,
         )
 
     def close(self) -> None:
@@ -113,7 +150,7 @@ class WBApiClient:
             days = min(self.config.lookback_days, 30)
             date_from_ts = int((now_utc - timedelta(days=days)).timestamp())
 
-        url = f"{self.MARKETPLACE_BASE_URL}/api/v3/orders"
+        url = f"{self.marketplace_base_url}/api/v3/orders"
         all_orders: List[Dict[str, Any]] = []
         next_cursor = 0
         limit = 1000
@@ -159,7 +196,7 @@ class WBApiClient:
         stop_event: Optional[threading.Event] = None,
     ) -> List[Dict[str, Any]]:
         """Получает статусы сборочных заданий батчами по 1000 ID (/api/v3/orders/status)."""
-        url = f"{self.MARKETPLACE_BASE_URL}/api/v3/orders/status"
+        url = f"{self.marketplace_base_url}/api/v3/orders/status"
         all_statuses: List[Dict[str, Any]] = []
 
         for i in range(0, len(order_ids), 1000):
@@ -175,3 +212,52 @@ class WBApiClient:
             time.sleep(0.25)
 
         return all_statuses
+    
+    def fetch_product_cards(
+        self,
+        stop_event: Optional[threading.Event] = None,
+    ) -> List[Dict[str, Any]]:
+        """Получает все карточки товаров продавца через /content/v2/get/cards/list."""
+        url = f"{self.content_base_url}/content/v2/get/cards/list"
+        all_cards: List[Dict[str, Any]] = []
+        limit = 100
+        cursor: Dict[str, Any] = {"limit": limit}
+
+        while True:
+            payload = {
+                "settings": {
+                    "cursor": cursor,
+                    "filter": {"withPhoto": -1},
+                }
+            }
+            data = self.request_with_retry(
+                "POST",
+                url,
+                endpoint_tag="content_v2_get_cards_list",
+                stop_event=stop_event,
+                json=payload,
+            )
+            batch = data.get("cards") or []
+            all_cards.extend(batch)
+
+            resp_cursor = data.get("cursor") or {}
+            total = resp_cursor.get("total", 0)
+            self.logger.info(
+                "Получено %d карточек (всего: %d, cursor.total=%s)",
+                len(batch),
+                len(all_cards),
+                total,
+            )
+
+            if not batch or total < limit:
+                break
+
+            cursor = {
+                "limit": limit,
+                "updatedAt": resp_cursor["updatedAt"],
+                "nmID": resp_cursor["nmID"],
+            }
+            # Лимит Content API: 100 запросов/мин (интервал 600 мс)
+            time.sleep(0.65)
+
+        return all_cards

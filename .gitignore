@@ -3,3 +3,4 @@ uv.lock
 .staff
 work_dir
 .answers
+packages/wb-mcp-server/tests/__pycache__

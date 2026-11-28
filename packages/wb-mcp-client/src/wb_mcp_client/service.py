@@ -7,6 +7,7 @@ from wb_mcp_client.db import Database
 from wb_mcp_client.logger import setup_logger
 from wb_mcp_client.report import build_and_upload_report
 from wb_mcp_client.wb_client import WBApiClient
+from wb_mcp_client.cards import sync_cards_now
 
 
 from pathlib import Path
@@ -29,6 +30,13 @@ class WBCollectorService:
             max_workers=config.max_workers,
             thread_name_prefix="wb-worker",
         )
+
+    def _task_fetch_cards(self) -> None:
+        try:
+            self.logger.info("Старт задачи синхронизации карточек товаров (/content/v2/get/cards/list)")
+            sync_cards_now(config=self.config, logger=self.logger, stop_event=self.stop_event)
+        except Exception:
+            self.logger.exception("Ошибка в задаче _task_fetch_cards")
 
     def _task_fetch_orders(self) -> None:
         try:
@@ -85,6 +93,11 @@ class WBCollectorService:
             threading.Thread(
                 target=self._scheduler_loop,
                 args=("xlsx-reporter", self.config.report_interval_sec, self._task_build_report),
+                daemon=True,
+            ),
+            threading.Thread(
+                target=self._scheduler_loop,
+                args=("cards-fetcher", self.config.cards_interval_sec, self._task_fetch_cards),
                 daemon=True,
             ),
         ]
